@@ -57,10 +57,6 @@ class LogPrice(Base):
     @property
     def date(self):
         return self.price_data.date if self.price_data else None
-    
-    __table_args__ = (
-        UniqueConstraint('price_id', 'date', name='uix_price_date'),
-    )
 
 class HighCorrelation(Base):
     __tablename__ = 'high_correlations'

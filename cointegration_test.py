@@ -116,16 +116,20 @@ def update_ticker_cache():
     """
     df = pd.read_sql_query(query, conn, parse_dates=['date'])
     
-    # Filter out low-priced names (last 10 trading days all >= $5)
+    # Filter out low-priced names (last 180 trading days all >= $5)
     def passes_price_filter(group):
-        last_10 = group.sort_values('date').tail(10)
-        return (last_10['close_price'] >= 5).all()
+        # Get all available data, sorted by date
+        sorted_data = group.sort_values('date')
+        # If we have less than 180 days, use all available data
+        days_to_check = min(180, len(sorted_data))
+        last_n_days = sorted_data.tail(days_to_check)
+        return (last_n_days['close_price'] >= 5).all()
     
     filtered = df.groupby('symbol').filter(passes_price_filter)
     
-    # Filter out thin data (at least 20 records)
+    # Filter out thin data (at least 180 records)
     counts = filtered['symbol'].value_counts()
-    valid = counts[counts >= 20].index
+    valid = counts[counts >= 180].index
     filtered = filtered[filtered['symbol'].isin(valid)].copy()
     
     # Update cache
@@ -134,22 +138,50 @@ def update_ticker_cache():
     print(f"Ticker cache updated at {last_cache_update}")
     
 
-def get_high_correlation_pairs():
-    """Get pairs from high_correlations table"""
-    conn = get_db_connection()
-    query = """
-        SELECT 
-            t1.symbol as symbol_a,
-            t2.symbol as symbol_b,
-            hc.pair_id
-        FROM high_correlations hc
-        JOIN tickers t1 ON hc.ticker_a_id = t1.ticker_id
-        JOIN tickers t2 ON hc.ticker_b_id = t2.ticker_id
+def get_pairs_from_table(use_cointegrated=False):
+    """Get pairs from either cointegration_tests or high_correlations table
+    
+    Args:
+        use_cointegrated (bool): If True, gets pairs from cointegration_tests table (for daily testing)
+                                If False, gets pairs from high_correlations table (for Friday testing)
     """
+    conn = get_db_connection()
+    
+    if use_cointegrated:
+        query = """
+            SELECT 
+                t1.symbol as symbol_a,
+                t2.symbol as symbol_b,
+                ct.pair_id,
+                ct.p_value,
+                ct.beta
+            FROM cointegration_tests ct
+            JOIN high_correlations hc ON ct.pair_id = hc.pair_id
+            JOIN tickers t1 ON hc.ticker_a_id = t1.ticker_id
+            JOIN tickers t2 ON hc.ticker_b_id = t2.ticker_id
+            WHERE ct.test_date = (
+                SELECT MAX(test_date) 
+                FROM cointegration_tests 
+                WHERE pair_id = ct.pair_id
+            )
+            /* This ensures we get the most recent test for each pair,
+               even if tests were run on different days */
+        """
+    else:
+        query = """
+            SELECT 
+                t1.symbol as symbol_a,
+                t2.symbol as symbol_b,
+                hc.pair_id
+            FROM high_correlations hc
+            JOIN tickers t1 ON hc.ticker_a_id = t1.ticker_id
+            JOIN tickers t2 ON hc.ticker_b_id = t2.ticker_id
+        """
+    
     return pd.read_sql_query(query, conn)
 
-def run_cointegration_test():
-    """Run cointegration test on high correlation pairs"""
+def run_cointegration_test(use_cointegrated=False):
+    """Run cointegration test on pairs from either cointegrated or high correlation tables"""
     print("Starting cointegration test...")
     global ticker_cache, last_cache_update
     
@@ -160,9 +192,9 @@ def run_cointegration_test():
     
     print(f"\n[{datetime.now()}] Running cointegration test...")
     
-    # Get pairs from high_correlations table
-    print("Fetching high correlation pairs...")
-    pairs_df = get_high_correlation_pairs()
+    # Get pairs from appropriate table
+    print(f"Fetching {'cointegrated' if use_cointegrated else 'high correlation'} pairs...")
+    pairs_df = get_pairs_from_table(use_cointegrated)
     total_pairs = len(pairs_df)
     print(f"Total pairs to analyze: {total_pairs:,}")
     

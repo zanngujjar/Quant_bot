@@ -5,7 +5,7 @@ import subprocess
 import pytz
 import os
 from dotenv import load_dotenv
-from cointegration_test import run_cointegration_test
+from cointegration_test import run_cointegration_test, update_log_prices
 
 # Load environment variables
 load_dotenv()
@@ -37,11 +37,6 @@ def run_correlation_test():
         return False
     return True
 
-def run_granger_test():
-    """Print Granger test message"""
-    print(f"\n[{datetime.now()}] Granger test")
-    return True
-
 def daily_task():
     """Main task to run at 4 PM"""
     # Run price update
@@ -50,23 +45,29 @@ def daily_task():
         return
     
     # Run cointegration test
-    if not run_cointegration_test():
-        print("Cointegration test failed")
+    if not update_log_prices():
+        print("Failed to update log prices")
+        return
     
+    cointegration_what = True;
+
     # Check if it's Friday for correlation test
-    if datetime.now().weekday() == 4:  # 4 is Friday
+    if datetime.now().weekday() == 4:
+        cointegration_what = False;
         if not run_correlation_test():
             print("Correlation test failed")
+            return
     
-    # Always run Granger test after price update
-    run_granger_test()
+    if not run_cointegration_test(cointegration_what):
+        print("Cointegration test failed")
+        return
 
 def main():
     # Set up the schedule
     schedule.every().day.at(UPDATE_TIME).do(daily_task)
     
     print("Starting main scheduler...")
-    print("Press Ctrl+C to stop")
+    print("Press Ctrl+C to stoprerer")
     
     try:
         while True:
