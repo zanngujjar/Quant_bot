@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
-from database import Base, PriceData, Ticker
+from DB.database import Base, PriceData, Ticker
 from datetime import datetime
 from dotenv import load_dotenv
 import os

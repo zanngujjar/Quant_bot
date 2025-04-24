@@ -5,6 +5,7 @@ import subprocess
 import pytz
 import os
 from dotenv import load_dotenv
+from cointegration_test import run_cointegration_test
 
 # Load environment variables
 load_dotenv()
@@ -47,6 +48,10 @@ def daily_task():
     if not run_update_prices():
         print("Price update failed, skipping further tests")
         return
+    
+    # Run cointegration test
+    if not run_cointegration_test():
+        print("Cointegration test failed")
     
     # Check if it's Friday for correlation test
     if datetime.now().weekday() == 4:  # 4 is Friday
