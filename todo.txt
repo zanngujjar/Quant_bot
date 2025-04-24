@@ -1,0 +1,150 @@
+# Quant Trading Bot Schema
+
+## Database Structure (Normalized SQL Schema)
+
+1. tickers
+   - ticker_id (INTEGER PRIMARY KEY)
+   - symbol (TEXT UNIQUE NOT NULL)  # e.g., 'AAPL', 'BLCN'
+   - name (TEXT)
+
+2. high_correlations
+   - pair_id (INTEGER PRIMARY KEY)
+   - ticker_a_id (INTEGER REFERENCES tickers(ticker_id))
+   - ticker_b_id (INTEGER REFERENCES tickers(ticker_id))
+   - correlation (REAL)
+
+3. cointegration_tests
+   - test_id (INTEGER PRIMARY KEY)
+   - pair_id (INTEGER REFERENCES high_correlations(pair_id))
+   - p_value (REAL)
+   - beta (REAL)
+   - test_date (DATE DEFAULT CURRENT_DATE)
+
+4. residuals
+   - residual_id (INTEGER PRIMARY KEY)
+   - test_id (INTEGER REFERENCES cointegration_tests(test_id))
+   - date (DATE)
+   - epsilon (REAL)
+   - z_score (REAL)
+
+5. price_data
+   - price_id (INTEGER PRIMARY KEY)
+   - ticker_id (INTEGER REFERENCES tickers(ticker_id))
+   - date (DATE)
+   - close_price (REAL)
+
+6. log_prices
+   - log_id (INTEGER PRIMARY KEY)
+   - price_id (INTEGER REFERENCES price_data(price_id))
+   - log_price (REAL)
+   - rolling_std (REAL)  # std dev over 20-day window
+
+## Program Components
+
+1. Data Monitor
+   - Continuously checks for new price data
+   - Updates z-scores for all pairs
+   - Triggers signal generation when conditions met
+
+2. Signal Generator
+   - Calculates z-scores for all pairs
+   - Identifies entry/exit points based on thresholds
+   - Creates new signals in database
+
+3. Trade Executor
+   - Monitors active signals
+   - Executes trades when all conditions met
+   - Manages position sizing
+   - Handles order placement
+
+4. Risk Manager
+   - Monitors open positions
+   - Checks stop-loss conditions
+   - Manages portfolio risk
+   - Handles position rebalancing
+
+
+## Trading Logic
+
+1. Entry Conditions
+   - Z-score crosses threshold (e.g., ±2)
+   - Volume requirements met
+   - No conflicting positions
+   - Risk limits not exceeded
+
+2. Exit Conditions
+   - Z-score returns to mean
+   - Stop-loss triggered
+   - Time-based exit
+   - Risk limits exceeded
+
+3. Position Sizing
+   - Based on volatility
+   - Account for correlation
+   - Respect risk limits
+   - Consider portfolio exposure
+
+## Daily Process
+
+1. End of Day Process (After Market Close)
+   - Wait for market close confirmation
+   - Fetch closing prices for all tracked tickers
+   - Update price_data table with new closing prices
+   - Trigger database update signal
+
+2. Database Update Process
+   - Update log_prices with new closing prices
+   - Calculate rolling standard deviations
+   - Run Granger causality tests on active trading pairs
+   - Update cointegration_tests table with new results
+   - Calculate new z-scores for all pairs
+   - Update residuals table with new values
+
+3. Signal Generation
+   - Check z-scores against thresholds
+   - Generate new trading signals
+   - Update position status
+   - Prepare next day's trading plan
+
+4. Risk Assessment
+   - Calculate portfolio metrics
+   - Update risk limits
+   - Generate end-of-day reports
+   - Set alerts for next trading day
+
+## Risk Management
+
+1. Position Limits
+   - Maximum position size
+   - Maximum pairs traded
+   - Maximum portfolio exposure
+
+2. Stop Losses
+   - Z-score based
+   - Price based
+   - Time based
+
+3. Portfolio Constraints
+   - Maximum drawdown
+   - Maximum daily loss
+   - Sector exposure limits
+
+## Monitoring and Reporting
+
+1. Performance Metrics
+   - Daily P&L
+   - Win rate
+   - Sharpe ratio
+   - Maximum drawdown
+
+2. Risk Metrics
+   - Portfolio volatility
+   - Correlation matrix
+   - Value at Risk (VaR)
+   - Exposure by sector
+
+3. Alerts
+   - Trade executions
+   - Risk limit breaches
+   - System errors
+   - Market events

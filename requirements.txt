@@ -1,0 +1,9 @@
+sqlalchemy==2.0.25
+requests==2.31.0
+pandas==2.1.4
+python-dotenv==1.0.0
+schedule==1.2.1
+pytz==2023.3.post1
+numpy==1.26.2
+statsmodels==0.14.1
+tqdm==4.66.1 
