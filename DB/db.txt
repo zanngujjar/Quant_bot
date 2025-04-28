@@ -1,0 +1,88 @@
+PRAGMA foreign_keys = ON;
+
+BEGIN TRANSACTION;
+
+-- 1. Tickers table
+CREATE TABLE tickers (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol   TEXT    NOT NULL UNIQUE
+);
+
+-- 2. Ticker prices (one row per ticker/date)
+CREATE TABLE ticker_prices (
+    id          INTEGER   PRIMARY KEY AUTOINCREMENT,
+    ticker_id   INTEGER   NOT NULL,
+    date        DATE      NOT NULL,
+    close_price REAL      NOT NULL,
+    created_at  DATETIME  NOT NULL DEFAULT (datetime('now')),
+    CONSTRAINT  uix_price_ticker_date UNIQUE (ticker_id, date),
+    FOREIGN KEY (ticker_id) REFERENCES tickers(id)
+);
+
+CREATE TABLE log_prices (
+    id                  INTEGER   PRIMARY KEY,       -- same as ticker_prices.id
+    ticker_price_id     INTEGER   NOT NULL,
+    log_price           REAL      NOT NULL,
+
+    -- 30-day rolling statistics
+    mean_30d            REAL,
+    std_30d             REAL,
+
+    -- 90-day rolling statistics
+    mean_90d            REAL,
+    std_90d             REAL,
+
+    CONSTRAINT uix_logprice_price
+        UNIQUE (ticker_price_id),
+    FOREIGN KEY (ticker_price_id)
+        REFERENCES ticker_prices(id)
+);
+
+-- 4. High‐correlation records between two tickers on a given date
+CREATE TABLE high_correlations (
+    id             INTEGER   PRIMARY KEY AUTOINCREMENT,
+    ticker_id_1    INTEGER   NOT NULL,
+    ticker_id_2    INTEGER   NOT NULL,
+    correlation    REAL      NOT NULL,
+    date           DATE      NOT NULL,
+    CONSTRAINT     uix_highcorr_pair_date UNIQUE (ticker_id_1, ticker_id_2, date),
+    FOREIGN KEY (ticker_id_1) REFERENCES tickers(id),
+    FOREIGN KEY (ticker_id_2) REFERENCES tickers(id)
+);
+
+-- 5. Cointegration test results for ticker pairs
+CREATE TABLE cointegration_tests (
+    id             INTEGER   PRIMARY KEY AUTOINCREMENT,
+    ticker_id_1    INTEGER   NOT NULL,
+    ticker_id_2    INTEGER   NOT NULL,
+    p_value        REAL,
+    beta           REAL,
+    test_date      DATE      NOT NULL,
+    CONSTRAINT     uix_coint_pair_date UNIQUE (ticker_id_1, ticker_id_2, test_date),
+    FOREIGN KEY (ticker_id_1) REFERENCES tickers(id),
+    FOREIGN KEY (ticker_id_2) REFERENCES tickers(id)
+);
+
+PRAGMA foreign_keys = ON;
+
+BEGIN TRANSACTION;
+
+-- 6. Epsilon‐prices: track daily ε, entry/exit Z‐score thresholds, and reversion success rate per price record and ticker pair
+CREATE TABLE epsilon_prices (
+    id                       INTEGER   PRIMARY KEY AUTOINCREMENT,
+    ticker_price_id          INTEGER   NOT NULL,   -- links to a specific date’s price
+    ticker_id_1              INTEGER   NOT NULL,   -- first ticker in the pair
+    ticker_id_2              INTEGER   NOT NULL,   -- second ticker in the pair
+    epsilon                  REAL      NOT NULL,   -- current spread or ε value
+    entry_threshold_z        REAL      NOT NULL,   -- entry Z‐score threshold
+    exit_threshold_z         REAL      NOT NULL,   -- exit Z‐score threshold
+    reversion_success_rate   REAL      NOT NULL,   -- % of past trades that reverted successfully
+    CONSTRAINT uix_epsilon_price
+        UNIQUE (ticker_price_id, ticker_id_1, ticker_id_2),
+    FOREIGN KEY (ticker_price_id)    REFERENCES ticker_prices(id),
+    FOREIGN KEY (ticker_id_1)        REFERENCES tickers(id),
+    FOREIGN KEY (ticker_id_2)        REFERENCES tickers(id)
+);
+
+
+COMMIT;
