@@ -1,0 +1,22 @@
+# Data manipulation and analysis
+pandas
+numpy
+
+# Visualization
+matplotlib
+
+# Financial data
+yfinance
+
+# Statistical analysis
+scipy
+statsmodels
+
+# Progress bars
+tqdm
+
+# Environment variables
+python-dotenv
+
+# Type hints
+typing 

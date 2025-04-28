@@ -84,4 +84,9 @@ var/
 wheels/
 *.egg-info/
 .installed.cfg
-*.egg 
+*.egg
+
+# Virtual Environment
+venv/
+__pycache__/
+*.pyc 
