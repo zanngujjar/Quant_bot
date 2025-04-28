@@ -6,7 +6,7 @@ from DB.database import Database
 
 # Polygon.io API configuration
 BASE_URL = "https://api.polygon.io"
-API_KEY = "hviobeGfrAoWxLm4Z7uB12xMBT3j6pOT"  # Replace with your actual API key
+API_KEY = "Replace with your actual API key"  # Replace with your actual API key
 
 def fetch_5y_history(ticker: str) -> pd.DataFrame:
     """
