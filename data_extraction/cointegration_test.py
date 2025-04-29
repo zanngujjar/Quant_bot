@@ -62,7 +62,7 @@ def run_engle_granger_test(log_prices: Dict[Tuple[str, str], List[Tuple[str, flo
     results = {}
     
     for pair, prices in log_prices.items():
-        if len(prices) < 20:  # Need at least 20 data points for meaningful test
+        if len(prices) < 180:  # Need at least 20 data points for meaningful test
             continue
             
         # Convert to numpy arrays
@@ -73,15 +73,17 @@ def run_engle_granger_test(log_prices: Dict[Tuple[str, str], List[Tuple[str, flo
             # Engle-Granger cointegration test
             _, p_value, _ = coint(x, y)
             
-            # Fit OLS model to get beta
-            model = sm.OLS(x, sm.add_constant(y)).fit()
-            beta = model.params[1]
-            
-            results[pair] = {
-                'p_value': p_value,
-                'beta': beta,
-                'test_date': datetime.now().date()
-            }
+            # Only add to results if p-value is significant
+            if p_value < 0.05:
+                # Fit OLS model to get beta
+                model = sm.OLS(x, sm.add_constant(y)).fit()
+                beta = model.params[1]
+                
+                results[pair] = {
+                    'p_value': p_value,
+                    'beta': beta,
+                    'test_date': datetime.now().date()
+                }
             
         except Exception as e:
             print(f"Error testing pair {pair}: {str(e)}")
@@ -91,13 +93,14 @@ def run_engle_granger_test(log_prices: Dict[Tuple[str, str], List[Tuple[str, flo
 
 def analyze_pairs(
     use_cointegration: bool = True,
-    days: int = 90,
+    days: int = 180,
     max_p_value: float = 0.05,
     min_correlation: float = 0.8,
     batch_size: int = 10
-) -> Dict[Tuple[str, str], Dict]:
+) -> None:
     """
     Get pairs and run Engle-Granger cointegration test on them in batches.
+    Store results in the database.
     
     Args:
         use_cointegration: If True, get pairs from cointegration table, else from high correlation
@@ -105,16 +108,11 @@ def analyze_pairs(
         max_p_value: Maximum p-value threshold for cointegration pairs
         min_correlation: Minimum correlation threshold for high correlation pairs
         batch_size: Number of pairs to process in each batch
-        
-    Returns:
-        Dictionary mapping (ticker1, ticker2) to test results containing:
-        - p_value: Cointegration test p-value
-        - beta: Beta coefficient from OLS regression
-        - test_date: Date of the test
     """
     print("Connecting to database...")
     db = Database()
-    all_results = {}
+    test_date = datetime.now().date()
+    processed_count = 0
     
     try:
         with db:
@@ -127,7 +125,7 @@ def analyze_pairs(
             
             if not pairs:
                 print("No pairs found!")
-                return {}
+                return
                 
             total_pairs = len(pairs)
             print(f"Found {total_pairs} pairs. Processing in batches of {batch_size}...")
@@ -151,52 +149,33 @@ def analyze_pairs(
                 if batch_log_prices:
                     # Run Engle-Granger test on current batch
                     batch_results = run_engle_granger_test(batch_log_prices)
-                    all_results.update(batch_results)
                     
-                    # Print progress for current batch
+                    # Store results in database
                     for pair, result in batch_results.items():
-                        print(f"  {pair[0]}/{pair[1]}: p-value={result['p_value']:.6f}, beta={result['beta']:.4f}")
+                        try:
+                            ticker_id_1 = db.get_ticker_id(pair[0])
+                            ticker_id_2 = db.get_ticker_id(pair[1])
+                            
+                            db.cursor.execute("""
+                                INSERT INTO cointegration_tests 
+                                (ticker_id_1, ticker_id_2, p_value, beta, test_date)
+                                VALUES (?, ?, ?, ?, ?)
+                            """, (ticker_id_1, ticker_id_2, result['p_value'], 
+                                 result['beta'], test_date))
+                            
+                            processed_count += 1
+                            print(f"  {pair[0]}/{pair[1]}: p-value={result['p_value']:.6f}, beta={result['beta']:.4f}")
+                        except Exception as e:
+                            print(f"Error storing results for pair {pair}: {str(e)}")
+                            continue
             
-            print(f"\nAnalysis complete! Processed {len(all_results)} pairs successfully.")
-            return all_results
+            db.connection.commit()
+            print(f"\nAnalysis complete! Stored results for {processed_count} pairs successfully.")
             
     except Exception as e:
         print(f"Error in analyze_pairs: {e}")
         raise
 
-def test_analyze_pairs():
-    """Test function to run analyze_pairs and print results"""
-    print("\nTesting analyze_pairs function...")
-    
-    # Test with both cointegration and correlation pairs
-    for use_cointegration in [True, False]:
-        pair_type = "cointegrated" if use_cointegration else "highly correlated"
-        print(f"\nAnalyzing {pair_type} pairs...")
-        
-        try:
-            results = analyze_pairs(
-                use_cointegration=use_cointegration,
-                days=90,
-                max_p_value=0.05,
-                min_correlation=0.8,
-                batch_size=10  # Process 10 pairs at a time
-            )
-            
-            if not results:
-                print(f"No {pair_type} pairs found")
-                continue
-                
-            print(f"\nFound {len(results)} {pair_type} pairs with valid results:")
-            for pair, result in results.items():
-                print(f"\nPair: {pair[0]}/{pair[1]}")
-                print(f"  p-value: {result['p_value']:.6f}")
-                print(f"  beta: {result['beta']:.4f}")
-                print(f"  test date: {result['test_date']}")
-                
-        except Exception as e:
-            print(f"Error analyzing {pair_type} pairs: {str(e)}")
-            
-    print("\nAnalysis complete!")
 
 if __name__ == "__main__":
-    test_analyze_pairs()
+    analyze_pairs()
