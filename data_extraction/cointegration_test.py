@@ -156,12 +156,13 @@ def analyze_pairs(
                             ticker_id_1 = db.get_ticker_id(pair[0])
                             ticker_id_2 = db.get_ticker_id(pair[1])
                             
-                            db.cursor.execute("""
-                                INSERT INTO cointegration_tests 
-                                (ticker_id_1, ticker_id_2, p_value, beta, test_date)
-                                VALUES (?, ?, ?, ?, ?)
-                            """, (ticker_id_1, ticker_id_2, result['p_value'], 
-                                 result['beta'], test_date))
+                            db.add_cointegration_test(
+                                ticker_id_1=ticker_id_1,
+                                ticker_id_2=ticker_id_2,
+                                p_value=result['p_value'],
+                                beta=result['beta'],
+                                test_date=test_date
+                            )
                             
                             processed_count += 1
                             print(f"  {pair[0]}/{pair[1]}: p-value={result['p_value']:.6f}, beta={result['beta']:.4f}")
@@ -169,13 +170,12 @@ def analyze_pairs(
                             print(f"Error storing results for pair {pair}: {str(e)}")
                             continue
             
-            db.connection.commit()
             print(f"\nAnalysis complete! Stored results for {processed_count} pairs successfully.")
             
     except Exception as e:
         print(f"Error in analyze_pairs: {e}")
         raise
 
-
 if __name__ == "__main__":
     analyze_pairs()
+
