@@ -1,0 +1,18 @@
+need to format cointegration test for 90 days rolling instead of entire dataset
+
+--> then we upload to db with same test date for each pair
+
+
+epsilon test:
+    -->calculate z-score based on 90 day rolling mean and std
+    --> find optimal z score entry and exits based on historical data
+    --> each entry and exit's z score is between +-2 and +-1 and goes to +-1 and 0 and is tested in increments of 0.1
+    --> calculate the reversion success rate based on z-scores to find optimal z-score entry and exit for trading pair
+    --store these in DB for a trading pair
+
+MonteCarlo simulation
+    --> based on a unique pair A and B find other historical points
+    
+
+
+

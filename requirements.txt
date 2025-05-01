@@ -20,3 +20,5 @@ python-dotenv
 
 # Type hints
 typing 
+
+requests

@@ -133,18 +133,22 @@ class Database:
             self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS epsilon_prices (
                 id                       INTEGER   PRIMARY KEY AUTOINCREMENT,
-                ticker_price_id          INTEGER   NOT NULL,
+                ticker_1_logprice_id     INTEGER   NOT NULL,
+                ticker_2_logprice_id     INTEGER   NOT NULL,
                 ticker_id_1              INTEGER   NOT NULL,
                 ticker_id_2              INTEGER   NOT NULL,
                 epsilon                  REAL      NOT NULL,
-                entry_threshold_z        REAL      NOT NULL,
-                exit_threshold_z         REAL      NOT NULL,
-                reversion_success_rate   REAL      NOT NULL,
+                rolling_mean             REAL      NOT NULL,
+                rolling_std              REAL      NOT NULL,
+                z_score                  REAL      NOT NULL,
+                date                     DATE      NOT NULL,
+                
                 CONSTRAINT uix_epsilon_price
-                    UNIQUE (ticker_price_id, ticker_id_1, ticker_id_2),
-                FOREIGN KEY (ticker_price_id)    REFERENCES ticker_prices(id),
-                FOREIGN KEY (ticker_id_1)        REFERENCES tickers(id),
-                FOREIGN KEY (ticker_id_2)        REFERENCES tickers(id)
+                    UNIQUE (ticker_1_logprice_id, ticker_2_logprice_id),
+                FOREIGN KEY (ticker_1_logprice_id) REFERENCES log_prices(id),
+                FOREIGN KEY (ticker_2_logprice_id) REFERENCES log_prices(id),
+                FOREIGN KEY (ticker_id_1)          REFERENCES tickers(id),
+                FOREIGN KEY (ticker_id_2)          REFERENCES tickers(id)
             )
             """)
             
@@ -395,18 +399,23 @@ class Database:
             print(f"Error getting high correlation pairs: {e}")
             raise
 
-    def get_cointegrated_pairs(self, max_p_value: float = 0.05) -> List[Tuple[str, str]]:
-        """Get all ticker pairs that are cointegrated below the p-value threshold
+    def get_latest_cointegrated_pairs(self, max_p_value: float = 0.05) -> List[Tuple[str, str, float]]:
+        """Get all ticker pairs that are cointegrated below the p-value threshold from the most recent test date
         
         Returns:
-            List of tuples containing (ticker1_symbol, ticker2_symbol)
+            List of tuples containing (ticker1_symbol, ticker2_symbol, beta)
         """
         try:
             self.cursor.execute("""
-                SELECT DISTINCT t1.symbol, t2.symbol
+                WITH latest_test_date AS (
+                    SELECT MAX(test_date) as max_date
+                    FROM cointegration_tests
+                )
+                SELECT DISTINCT t1.symbol, t2.symbol, ct.beta
                 FROM cointegration_tests ct
                 JOIN tickers t1 ON ct.ticker_id_1 = t1.id
                 JOIN tickers t2 ON ct.ticker_id_2 = t2.id
+                JOIN latest_test_date ltd ON ct.test_date = ltd.max_date
                 WHERE ct.p_value <= ?
                 ORDER BY t1.symbol, t2.symbol
             """, (max_p_value,))
