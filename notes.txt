@@ -10,6 +10,30 @@ epsilon test:
     --> calculate the reversion success rate based on z-scores to find optimal z-score entry and exit for trading pair
     --store these in DB for a trading pair
 
+
+trade_window table
+    id primary key INT
+    ticker_id1 INT
+    ticker_id2 INT
+    optimal_zscore REAL
+    optimal_reversions INT
+    optimal_reversion_success INT
+    start_date DATE
+    end_date DATE
+    trade_type BOOL
+    unique constraint tickerid_1 ticker_id2 start_date end_date
+
+options
+Based on ticker and date from trade window table find option price 
+upload to db 
+
+
+calculate pnl based on trade 
+option price compared to start end date price 
+
+
+
+
 MonteCarlo simulation
     --> based on a unique pair A and B find other historical points
     

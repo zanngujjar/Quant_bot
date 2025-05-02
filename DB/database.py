@@ -152,6 +152,23 @@ class Database:
             )
             """)
             
+            # Create trade_window table
+            self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS trade_window (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker_id1 INTEGER NOT NULL,
+                ticker_id2 INTEGER NOT NULL,
+                optimal_zscore REAL,
+                reversion_success BOOL,
+                start_date DATE NOT NULL,
+                end_date DATE NOT NULL,
+                trade_type BOOL,
+                UNIQUE (ticker_id1, ticker_id2, start_date, end_date),
+                FOREIGN KEY (ticker_id1) REFERENCES tickers(id),
+                FOREIGN KEY (ticker_id2) REFERENCES tickers(id)
+            )
+            """)
+            
             self.conn.commit()
             print("Database tables created successfully!")
             
@@ -706,5 +723,61 @@ class Database:
             print(f"Error getting epsilon ticker pairs: {e}")
             raise
 
+    def add_trade_window(self, ticker_id1: int, ticker_id2: int, optimal_zscore: float,
+                         reversion_success: bool, start_date: str, end_date: str, trade_type: bool) -> int:
+        """Insert a single trade window record and return its id."""
+        try:
+            self.cursor.execute("""
+                INSERT OR REPLACE INTO trade_window
+                (ticker_id1, ticker_id2, optimal_zscore, reversion_success, start_date, end_date, trade_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (ticker_id1, ticker_id2, optimal_zscore, reversion_success, start_date, end_date, trade_type))
+            self.conn.commit()
+            return self.cursor.lastrowid
+        except sqlite3.Error as e:
+            print(f"Error adding trade window: {e}")
+            self.conn.rollback()
+            raise
 
+    def add_trade_windows_batch(self, trade_windows: List[tuple]) -> None:
+        """
+        Bulk insert trade window records.
+        Each tuple should be:
+        (ticker_id1, ticker_id2, optimal_zscore, reversion_success, start_date, end_date, trade_type)
+        """
+        try:
+            self.cursor.executemany("""
+                INSERT OR REPLACE INTO trade_window
+                (ticker_id1, ticker_id2, optimal_zscore, reversion_success, start_date, end_date, trade_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, trade_windows)
+            self.conn.commit()
+        except sqlite3.Error as e:
+            print(f"Error adding trade windows in batch: {e}")
+            self.conn.rollback()
+            raise
+
+    def get_trade_windows(self, ticker_id1: int = None, ticker_id2: int = None) -> List[Dict[str, any]]:
+        """
+        Retrieve trade window records, optionally filtered by ticker IDs.
+        Returns a list of dicts.
+        """
+        try:
+            query = "SELECT * FROM trade_window"
+            params = []
+            if ticker_id1 is not None and ticker_id2 is not None:
+                query += " WHERE ticker_id1 = ? AND ticker_id2 = ?"
+                params = [ticker_id1, ticker_id2]
+            elif ticker_id1 is not None:
+                query += " WHERE ticker_id1 = ?"
+                params = [ticker_id1]
+            elif ticker_id2 is not None:
+                query += " WHERE ticker_id2 = ?"
+                params = [ticker_id2]
+            self.cursor.execute(query, params)
+            columns = [desc[0] for desc in self.cursor.description]
+            return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+        except sqlite3.Error as e:
+            print(f"Error getting trade windows: {e}")
+            raise
 
