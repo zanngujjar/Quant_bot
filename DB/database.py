@@ -253,18 +253,32 @@ class Database:
             self.conn.rollback()
             raise
 
-    def add_epsilon_price(self, ticker_price_id: int, ticker_id_1: int, ticker_id_2: int,
-                         epsilon: float, entry_threshold_z: float, 
-                         exit_threshold_z: float, reversion_success_rate: float) -> None:
-        """Add epsilon price data for a ticker pair"""
+    def add_epsilon_price(self, ticker_1_logprice_id: int, ticker_2_logprice_id: int,
+                         ticker_id_1: int, ticker_id_2: int, epsilon: float,
+                         rolling_mean: float, rolling_std: float, z_score: float,
+                         date: str) -> None:
+        """
+        Add epsilon price data for a ticker pair with rolling statistics
+        
+        Args:
+            ticker_1_logprice_id: ID of the first ticker's log price
+            ticker_2_logprice_id: ID of the second ticker's log price
+            ticker_id_1: ID of the first ticker
+            ticker_id_2: ID of the second ticker
+            epsilon: The epsilon value
+            rolling_mean: Rolling mean of the spread
+            rolling_std: Rolling standard deviation of the spread
+            z_score: Z-score of the spread
+            date: Date of the observation
+        """
         try:
             self.cursor.execute("""
                 INSERT OR REPLACE INTO epsilon_prices 
-                (ticker_price_id, ticker_id_1, ticker_id_2, epsilon, 
-                 entry_threshold_z, exit_threshold_z, reversion_success_rate) 
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (ticker_price_id, ticker_id_1, ticker_id_2, epsilon,
-                  entry_threshold_z, exit_threshold_z, reversion_success_rate))
+                (ticker_1_logprice_id, ticker_2_logprice_id, ticker_id_1, ticker_id_2,
+                 epsilon, rolling_mean, rolling_std, z_score, date) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (ticker_1_logprice_id, ticker_2_logprice_id, ticker_id_1, ticker_id_2,
+                  epsilon, rolling_mean, rolling_std, z_score, date))
             
             self.conn.commit()
             
@@ -350,25 +364,33 @@ class Database:
     def get_epsilon_prices(self, ticker_id_1: int, ticker_id_2: int, 
                           start_date: Optional[str] = None, 
                           end_date: Optional[str] = None) -> List[Tuple]:
-        """Get epsilon price data for a pair of tickers within a date range"""
+        """Get epsilon price data for a pair of tickers within a date range
+        
+        Args:
+            ticker_id_1: ID of the first ticker
+            ticker_id_2: ID of the second ticker
+            start_date: Optional start date filter (inclusive)
+            end_date: Optional end date filter (inclusive)
+            
+        Returns:
+            List of tuples containing (date, epsilon, rolling_mean, rolling_std, z_score)
+        """
         try:
             query = """
-                SELECT tp.date, ep.epsilon, ep.entry_threshold_z, 
-                       ep.exit_threshold_z, ep.reversion_success_rate
+                SELECT ep.date, ep.epsilon, ep.rolling_mean, ep.rolling_std, ep.z_score
                 FROM epsilon_prices ep
-                JOIN ticker_prices tp ON ep.ticker_price_id = tp.id
                 WHERE ep.ticker_id_1 = ? AND ep.ticker_id_2 = ?
             """
             params = [ticker_id_1, ticker_id_2]
             
             if start_date:
-                query += " AND tp.date >= ?"
+                query += " AND ep.date >= ?"
                 params.append(start_date)
             if end_date:
-                query += " AND tp.date <= ?"
+                query += " AND ep.date <= ?"
                 params.append(end_date)
                 
-            query += " ORDER BY tp.date"
+            query += " ORDER BY ep.date"
             
             self.cursor.execute(query, params)
             return self.cursor.fetchall()
@@ -540,5 +562,131 @@ class Database:
         except sqlite3.Error as e:
             print(f"Error getting latest price dates: {e}")
             raise
+
+    def add_epsilon_prices_batch(self, epsilon_data: List[Tuple]) -> None:
+        """
+        Add multiple epsilon price records in a single transaction for better performance.
+        
+        Args:
+            epsilon_data: List of tuples, each containing:
+                (ticker_1_logprice_id, ticker_2_logprice_id, ticker_id_1, ticker_id_2,
+                 epsilon, rolling_mean, rolling_std, z_score, date)
+        """
+        try:
+            self.cursor.executemany("""
+                INSERT OR REPLACE INTO epsilon_prices 
+                (ticker_1_logprice_id, ticker_2_logprice_id, ticker_id_1, ticker_id_2,
+                 epsilon, rolling_mean, rolling_std, z_score, date) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, epsilon_data)
+            
+            self.conn.commit()
+            
+        except sqlite3.Error as e:
+            print(f"Error adding epsilon prices in batch: {e}")
+            self.conn.rollback()
+            raise
+
+    def get_log_price_ids_batch(self, ticker_price_ids: List[int]) -> Dict[int, int]:
+        """
+        Get log price IDs for a batch of ticker price IDs
+        
+        Args:
+            ticker_price_ids: List of ticker_price_id values
+            
+        Returns:
+            Dictionary mapping ticker_price_id to log_price.id
+        """
+        try:
+            if not ticker_price_ids:
+                return {}
+                
+            placeholders = ','.join(['?' for _ in ticker_price_ids])
+            query = f"""
+                SELECT ticker_price_id, id
+                FROM log_prices
+                WHERE ticker_price_id IN ({placeholders})
+            """
+            
+            self.cursor.execute(query, ticker_price_ids)
+            return dict(self.cursor.fetchall())
+            
+        except sqlite3.Error as e:
+            print(f"Error getting log price IDs in batch: {e}")
+            raise
+
+    def get_log_price_id_from_ticker_price(self, ticker_price_id: int) -> Optional[int]:
+        """
+        Get log price ID for a given ticker_price_id
+        
+        Args:
+            ticker_price_id: The ID from the ticker_prices table
+            
+        Returns:
+            The log price ID if found, None otherwise
+        """
+        try:
+            query = """
+                SELECT id
+                FROM log_prices
+                WHERE ticker_price_id = ?
+            """
+            
+            self.cursor.execute(query, (ticker_price_id,))
+            result = self.cursor.fetchone()
+            return result[0] if result else None
+            
+        except sqlite3.Error as e:
+            print(f"Error getting log price ID: {e}")
+            raise
+
+    def get_ticker_price_id(self, ticker_id: int, date: str) -> Optional[int]:
+        """
+        Get ticker price ID for a given ticker_id and date
+        
+        Args:
+            ticker_id: The ID from the tickers table
+            date: The date string in YYYY-MM-DD format
+            
+        Returns:
+            The ticker price ID if found, None otherwise
+        """
+        try:
+            query = """
+                SELECT id
+                FROM ticker_prices
+                WHERE ticker_id = ? AND date = ?
+            """
+            
+            self.cursor.execute(query, (ticker_id, date))
+            result = self.cursor.fetchone()
+            return result[0] if result else None
+            
+        except sqlite3.Error as e:
+            print(f"Error getting ticker price ID: {e}")
+            raise
+
+    def get_epsilon_ticker_pairs(self) -> List[List[int]]:
+        """
+        Get all unique ticker pairs from epsilon_prices table
+        
+        Returns:
+            List of [ticker_id_1, ticker_id_2] pairs
+        """
+        try:
+            query = """
+                SELECT DISTINCT ticker_id_1, ticker_id_2
+                FROM epsilon_prices
+                ORDER BY ticker_id_1, ticker_id_2
+            """
+            
+            self.cursor.execute(query)
+            results = self.cursor.fetchall()
+            return [[pair[0], pair[1]] for pair in results]
+            
+        except sqlite3.Error as e:
+            print(f"Error getting epsilon ticker pairs: {e}")
+            raise
+
 
 

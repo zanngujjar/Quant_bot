@@ -14,9 +14,6 @@ db.connect()
 try:
     cointegrated_data = db.get_latest_cointegrated_pairs()
     
-    # Take only the first pair
-    cointegrated_data = [cointegrated_data[27439]]  # Only process first pair
-    
     # Split the data into pairs and betas
     cointegrated_pairs = [(pair[0], pair[1]) for pair in cointegrated_data]
     betas = {(pair[0], pair[1]): pair[2] for pair in cointegrated_data}
@@ -26,6 +23,8 @@ try:
 
     # Process the pair_prices data
     results = []
+    epsilon_data = []  # List to store formatted data for batch upload
+        
     for i, (pair, prices) in enumerate(pair_prices.items()):
         print(f"Processing pair {i+1}/{len(pair_prices)}")
         
@@ -64,46 +63,47 @@ try:
             df.at[df.index[t], 'zscore'] = z
             df.at[df.index[t], 'epsilon'] = abs(z)
         
-        results.append(df)
-
-    # Plotting code
-    pairs_list = list(pair_prices.keys())
-    for i, df in enumerate(results):
-        if len(df) < 90:
-            continue  # Skip if not enough data
-
-        # First subplot: log prices
-        plt.figure(figsize=(14, 6))
-        plt.plot(df['date'], df[pairs_list[i][0]], label=f"{pairs_list[i][0]} (log price)")
-        plt.plot(df['date'], df[pairs_list[i][1]], label=f"{pairs_list[i][1]} (log price)")
-        plt.title(f"Log Prices for {pairs_list[i][0]} and {pairs_list[i][1]}")
-        plt.legend()
-        plt.grid(True)
-        plt.gca().xaxis.set_major_locator(DayLocator(interval=7))  # Show weekly ticks
-        plt.gcf().autofmt_xdate()
-        plt.xticks(rotation=45, ha='right')
-        plt.tight_layout()
-        plt.show()
-
-        # Second subplot: spread, rolling mean, and z-score bands
-        plt.figure(figsize=(14, 6))
-        plt.plot(df['date'], df['spread'], label='Spread', color='gray')
-        plt.plot(df['date'], df['rolling_mean'], label='Rolling Mean', color='blue')
-
-        # Plot z-score ±2 lines
-        plt.plot(df['date'], df['rolling_mean'] + 2 * df['rolling_std'], label='+2σ Band', linestyle='--', color='green')
-        plt.plot(df['date'], df['rolling_mean'] - 2 * df['rolling_std'], label='-2σ Band', linestyle='--', color='red')
-
-        plt.title(f"Spread and Rolling Bands for {pairs_list[i][0]}-{pairs_list[i][1]}")
-        plt.legend()
-        plt.grid(True)
-        plt.gca().xaxis.set_major_locator(DayLocator(interval=7))  # Show weekly ticks
-        plt.gcf().autofmt_xdate()
-        plt.xticks(rotation=45, ha='right')
-        plt.tight_layout()
-        plt.show()
-
-        break
+        # Calculate z-score
+        df['zscore'] = (df['spread'] - df['rolling_mean']) / df['rolling_std']
+        
+        # Get ticker IDs
+        ticker1_id = db.get_ticker_id(pair[0])
+        ticker2_id = db.get_ticker_id(pair[1])
+        
+        # Format data for batch upload
+        for idx, row in df.iterrows():
+            if pd.notna(row['rolling_mean']):  # Only include rows with valid calculations
+                date_str = row['date'].strftime('%Y-%m-%d')
+                
+                # First get ticker_price_ids using ticker_id and date
+                ticker_price1_id = db.get_ticker_price_id(ticker1_id, date_str)
+                ticker_price2_id = db.get_ticker_price_id(ticker2_id, date_str)
+                
+                # Then get log_price_ids from ticker_price_ids
+                if ticker_price1_id and ticker_price2_id:
+                    price1_id = db.get_log_price_id_from_ticker_price(ticker_price1_id)
+                    price2_id = db.get_log_price_id_from_ticker_price(ticker_price2_id)
+                    
+                    if price1_id and price2_id:  # Only include if we have both log price IDs
+                        epsilon_data.append((
+                            price1_id,           # ticker_1_logprice_id
+                            price2_id,           # ticker_2_logprice_id
+                            ticker1_id,          # ticker_id_1
+                            ticker2_id,          # ticker_id_2
+                            row['epsilon'],      # epsilon
+                            row['rolling_mean'], # rolling_mean
+                            row['rolling_std'],  # rolling_std
+                            row['zscore'],       # z_score
+                            date_str             # date
+                        ))
+    
+    # Batch upload the epsilon data
+    if epsilon_data:
+        print(f"Uploading {len(epsilon_data)} epsilon price records...")
+        db.add_epsilon_prices_batch(epsilon_data)
+        print("Upload complete!")
+    
+    print("done")
 
 finally:
     # Ensure database connection is closed even if an error occurs

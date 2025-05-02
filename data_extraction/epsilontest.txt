@@ -1,0 +1,115 @@
+    
+        # Find dates where z-score crosses ±2 threshold
+        upper_crosses = df[
+            (df['zscore'].shift(1) < 2) & (df['zscore'] >= 2)
+        ]['date']
+        lower_crosses = df[
+            (df['zscore'].shift(1) > -2) & (df['zscore'] <= -2)
+        ]['date']
+        
+        # Track mean reversions after upper threshold crosses (+2σ)
+        for cross_date in upper_crosses:
+            cross_idx = df[df['date'] == cross_date].index[0]
+            future_data = df.loc[cross_idx:]
+            mean_reversion = future_data[abs(future_data['zscore']) < 0.5]
+            if not mean_reversion.empty:
+                reversion_date = mean_reversion.iloc[0]['date']
+                
+                # Get prices at entry and exit for both tickers
+                entry_prices = df[df['date'] == cross_date].iloc[0]
+                exit_prices = mean_reversion.iloc[0]
+                
+                # Calculate percentage changes
+                ticker1_change = 100 * (np.exp(exit_prices[pair[0]] - entry_prices[pair[0]]) - 1)
+                ticker2_change = 100 * (np.exp(exit_prices[pair[1]] - entry_prices[pair[1]]) - 1)
+                
+                ticker1_trade = -ticker1_change  # Short position makes negative change positive
+                ticker2_trade = ticker2_change   # Long position
+                trade_return = (ticker1_trade + ticker2_trade) / 100  # Convert to decimal
+                total_return_percentage += trade_return * 100
+                
+                # Update returns for each trade based on their trading percentage
+                for trade_num in range(1, 11):
+                    trading_percent = 1.1 - (trade_num * 0.1)  # 1.0 down to 0.1
+                    trade_returns[trade_num] += trade_return * trading_percent
+        
+        # Track mean reversions after lower threshold crosses (-2σ)
+        for cross_date in lower_crosses:
+            cross_idx = df[df['date'] == cross_date].index[0]
+            future_data = df.loc[cross_idx:]
+            mean_reversion = future_data[abs(future_data['zscore']) < 0.5]
+            if not mean_reversion.empty:
+                reversion_date = mean_reversion.iloc[0]['date']
+                
+                # Get prices at entry and exit for both tickers
+                entry_prices = df[df['date'] == cross_date].iloc[0]
+                exit_prices = mean_reversion.iloc[0]
+                
+                # Calculate percentage changes
+                ticker1_change = 100 * (np.exp(exit_prices[pair[0]] - entry_prices[pair[0]]) - 1)
+                ticker2_change = 100 * (np.exp(exit_prices[pair[1]] - entry_prices[pair[1]]) - 1)
+                
+                ticker1_trade = ticker1_change    # Long position
+                ticker2_trade = -ticker2_change   # Short position makes negative change positive
+                trade_return = (ticker1_trade + ticker2_trade) / 100  # Convert to decimal
+                total_return_percentage += trade_return * 100
+                
+                # Update returns for each trade based on their trading percentage
+                for trade_num in range(1, 11):
+                    trading_percent = 1.1 - (trade_num * 0.1)  # 1.0 down to 0.1
+                    trade_returns[trade_num] += trade_return * trading_percent
+
+        # Print intermediate results for this pair
+        print(f"\nResults after processing pair {i+1}:")
+        for trade_num in range(1, 11):
+            trading_percent = (1.1 - trade_num * 0.1) * 100  # Convert to percentage for display
+            current_balance = INITIAL_BALANCE * (1 + trade_returns[trade_num])
+            print(f"Trade {trade_num} balance (trading {trading_percent:.0f}%): ${current_balance:.2f}")
+        print(f"Total return percentage so far: {total_return_percentage:.2f}%")
+          # Print final results after processing all pairs
+    print("\nFinal Results:")
+    for trade_num in range(1, 11):
+        trading_percent = (1.1 - trade_num * 0.1) * 100  # Convert to percentage for display
+        final_balance = INITIAL_BALANCE * (1 + trade_returns[trade_num])
+        print(f"Trade {trade_num} final balance (trading {trading_percent:.0f}%): ${final_balance:.2f}")
+    print(f"Total return percentage across all pairs: {total_return_percentage:.2f}%")
+
+    # Plotting code
+    
+    ##pairs_list = list(pair_prices.keys())
+    ##for i, df in enumerate(results):
+    ##    if len(df) < 90:
+    ##        continue  # Skip if not enough data
+
+    ##    # First subplot: log prices
+    ##    plt.figure(figsize=(14, 6))
+    ##    plt.plot(df['date'], df[pairs_list[i][0]], label=f"{pairs_list[i][0]} (log price)")
+    ##    plt.plot(df['date'], df[pairs_list[i][1]], label=f"{pairs_list[i][1]} (log price)")
+    ##    plt.title(f"Log Prices for {pairs_list[i][0]} and {pairs_list[i][1]}")
+    ##    plt.legend()
+    ##    plt.grid(True)
+    ##    plt.gca().xaxis.set_major_locator(DayLocator(interval=7))  # Show weekly ticks
+    ##  plt.gcf().autofmt_xdate()
+    ##    plt.xticks(rotation=45, ha='right')
+    ##    plt.tight_layout()
+    ##    plt.show()
+
+    ##    # Second subplot: spread, rolling mean, and z-score bands
+    ##    plt.figure(figsize=(14, 6))
+    ##    plt.plot(df['date'], df['spread'], label='Spread', color='gray')
+    ##    plt.plot(df['date'], df['rolling_mean'], label='Rolling Mean', color='blue')
+
+    ##    # Plot z-score ±2 lines
+    ##    plt.plot(df['date'], df['rolling_mean'] + 2 * df['rolling_std'], label='+2σ Band', linestyle='--', color='green')
+    ##    plt.plot(df['date'], df['rolling_mean'] - 2 * df['rolling_std'], label='-2σ Band', linestyle='--', color='red')
+
+    ##    plt.title(f"Spread and Rolling Bands for {pairs_list[i][0]}-{pairs_list[i][1]}")
+    ##    plt.legend()
+    ##    plt.grid(True)
+    ##    plt.gca().xaxis.set_major_locator(DayLocator(interval=7))  # Show weekly ticks
+    ##    plt.gcf().autofmt_xdate()
+    ##    plt.xticks(rotation=45, ha='right')
+    ##    plt.tight_layout()
+    ##    plt.show()
+
+    ##    break
