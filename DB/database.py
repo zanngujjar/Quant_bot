@@ -298,6 +298,24 @@ class Database:
             print(f"Error getting ticker ID: {e}")
             raise
 
+    def get_ticker_symbol(self, ticker_id: int) -> Optional[str]:
+        """Get the symbol of a ticker by its ID
+        
+        Args:
+            ticker_id: The ID from the tickers table
+            
+        Returns:
+            The ticker symbol if found, None otherwise
+        """
+        try:
+            self.cursor.execute("SELECT symbol FROM tickers WHERE id = ?", (ticker_id,))
+            result = self.cursor.fetchone()
+            return result[0] if result else None
+            
+        except sqlite3.Error as e:
+            print(f"Error getting ticker symbol: {e}")
+            raise
+
     def get_ticker_prices(self, ticker_id: int, start_date: Optional[str] = None, 
                          end_date: Optional[str] = None) -> List[Tuple]:
         """Get price data for a ticker within a date range"""
