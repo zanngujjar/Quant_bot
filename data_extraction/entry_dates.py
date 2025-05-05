@@ -4,12 +4,14 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from DB.database import Database
 from collections import defaultdict
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Tuple
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.dates import DateFormatter
 from tqdm import tqdm
+import multiprocessing as mp
+from functools import partial
 
 def most_frequent_one_unit_drop(epsilon_data: List[Dict]) -> float:
     """
@@ -172,8 +174,66 @@ def plot_zscore_trades(dates, z_scores, optimal_threshold, ticker_a, ticker_b):
     plt.tight_layout()
     plt.show()
 
+def process_pair(pair_data: Tuple) -> List[Tuple]:
+    """Process a single pair and return trade windows"""
+    # Create a new database connection for each process
+    db = Database()
+    db.connect()
+    
+    try:
+        pair = (pair_data[0], pair_data[1])
+        beta = pair_data[2]
+        
+        ticker_id_1 = db.get_ticker_id(pair[0])
+        ticker_id_2 = db.get_ticker_id(pair[1])
+        
+        # Get epsilon prices for the pair
+        epsilon_prices = db.get_epsilon_prices(ticker_id_1, ticker_id_2)
+        
+        if not epsilon_prices:
+            return []
+        
+        # Convert to DataFrame for faster processing
+        df = pd.DataFrame(epsilon_prices, columns=['date', 'epsilon', 'rolling_mean', 'rolling_std', 'z_score'])
+        df['date'] = pd.to_datetime(df['date'])
+        
+        # Convert to format needed for analysis
+        epsilon_data = [
+            {'date': row['date'].date(), 'z_score': row['z_score']}
+            for _, row in df.iterrows()
+        ]
+        
+        if not epsilon_data:
+            return []
+        
+        optimal_threshold = most_frequent_one_unit_drop(epsilon_data)
+        if optimal_threshold == 7:
+            return []
+            
+        pos_results = analyze_threshold_reversions(epsilon_data, optimal_threshold)
+        
+        return [
+            (
+                ticker_id_1,
+                ticker_id_2,
+                optimal_threshold,
+                1 if trade['success'] else 0,
+                trade['entry_date'],
+                trade['exit_date'],
+                1 if trade['type'] == 'upper' else 0
+            )
+            for trade in pos_results['results']
+        ]
+    finally:
+        db.close()
+
+def chunk_data(data, chunk_size):
+    """Split data into chunks for batch processing"""
+    for i in range(0, len(data), chunk_size):
+        yield data[i:i + chunk_size]
+
 def main():
-    # Initialize database connection
+    # Initialize database connection for the main process
     db = Database()
     db.connect()
 
@@ -182,58 +242,27 @@ def main():
         cointegrated_data = db.get_latest_cointegrated_pairs()
         
         if cointegrated_data:
-            for idx, first_pair in enumerate(tqdm(cointegrated_data, desc="Processing pairs", unit="pair")):
-                pair = (first_pair[0], first_pair[1])
-                beta = first_pair[2]
-                
-                print(f"Processing pair {idx+1}/{len(cointegrated_data)}: {pair[0]}-{pair[1]}")
-                
-                ticker_id_1 = db.get_ticker_id(pair[0])
-                ticker_id_2 = db.get_ticker_id(pair[1])
-                
-                # Get epsilon prices for the pair
-                epsilon_prices = db.get_epsilon_prices(ticker_id_1, ticker_id_2)
-                
-                if not epsilon_prices:
-                    print(f"No epsilon prices found for pair {pair[0]}-{pair[1]}")
-                    continue  # Move to the next pair
-                
-                # Convert to format needed for analysis - use all data points
-                epsilon_data = []
-                for date, epsilon, rolling_mean, rolling_std, z_score in epsilon_prices:
-                    date_obj = datetime.strptime(date, '%Y-%m-%d')
-                    epsilon_data.append({
-                        'date': date_obj.date(),
-                        'z_score': z_score
-                    })
-                
-                # Calculate optimal threshold and analyze reversions
-                if epsilon_data:
-                    optimal_threshold = most_frequent_one_unit_drop(epsilon_data)
-                    # Only proceed if optimal_threshold is not 7
-                    if optimal_threshold != 7:
-                        pos_results = analyze_threshold_reversions(epsilon_data, optimal_threshold)
-                        
-                        trade_windows = [
-                            (
-                                ticker_id_1,
-                                ticker_id_2,
-                                optimal_threshold,
-                                1 if trade['success'] else 0,  # reversion_success
-                                trade['entry_date'],
-                                trade['exit_date'],
-                                1 if trade['type'] == 'upper' else 0  # trade_type: 1=upper, 0=lower
-                            )
-                            for trade in pos_results['results']
-                        ]
-
-                        if trade_windows:
-                            db.add_trade_windows_batch(trade_windows)
-                            print(f"Inserted {len(trade_windows)} trade windows into the database.")
-                    else:
-                        print("Optimal threshold is 7; skipping upload to trade_window table.")
-                else:
-                    print("No data points to plot")
+            # Create a pool of workers
+            num_cores = mp.cpu_count()
+            chunk_size = 1000  # Process 1000 pairs at a time to manage memory
+            
+            all_results = []
+            total_chunks = (len(cointegrated_data) + chunk_size - 1) // chunk_size
+            
+            with tqdm(total=len(cointegrated_data), desc="Processing pairs", unit="pair") as pbar:
+                for chunk in chunk_data(cointegrated_data, chunk_size):
+                    # Process each chunk with a fresh pool
+                    with mp.Pool(num_cores) as pool:
+                        for result in pool.imap_unordered(process_pair, chunk):
+                            all_results.extend(result)
+                            pbar.update()
+            
+            # Batch insert all trade windows
+            if all_results:
+                # Process in chunks to avoid memory issues
+                for chunk in chunk_data(all_results, 1000):
+                    db.add_trade_windows_batch(chunk)
+                print(f"Inserted {len(all_results)} trade windows into the database.")
         else:
             print("No cointegrated pairs found")
     

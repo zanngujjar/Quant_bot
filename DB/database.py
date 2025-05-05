@@ -153,6 +153,7 @@ class Database:
             """)
             
             # Create trade_window table
+            #TRADE_TYPE: short A / long B true //// short B / long A false
             self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS trade_window (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,16 +163,43 @@ class Database:
                 reversion_success BOOL,
                 start_date DATE NOT NULL,
                 end_date DATE NOT NULL,
-                trade_type BOOL,
+                trade_type BOOL, 
                 UNIQUE (ticker_id1, ticker_id2, start_date, end_date),
                 FOREIGN KEY (ticker_id1) REFERENCES tickers(id),
                 FOREIGN KEY (ticker_id2) REFERENCES tickers(id)
             )
             """)
             
+            # Create option_snapshots table
+            self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS option_snapshots (
+                    option_symbol      TEXT,
+                    ticker_id         INTEGER NOT NULL,
+                    underlying         TEXT,
+                    quote_date         DATE,
+                    expiration_date    DATE,
+                    strike_price       NUMERIC(10,2),
+                    contract_type      CHAR(1),        -- 'C' or 'P'
+                    bid                NUMERIC(10,4),
+                    ask                NUMERIC(10,4),
+                    last               NUMERIC(10,4),
+                    volume             INT,
+                    open_interest      INT,
+                    implied_volatility NUMERIC(9,6),
+                    delta              NUMERIC(8,5),
+                    gamma              NUMERIC(8,5),
+                    theta              NUMERIC(8,5),
+                    vega               NUMERIC(8,5),
+                    underlying_price   NUMERIC(10,4),
+                    PRIMARY KEY (option_symbol, ticker_id),
+                    FOREIGN KEY (ticker_id) REFERENCES tickers(id),
+                    UNIQUE (option_symbol, ticker_id)
+                )
+            """)
+            
             self.conn.commit()
             print("Database tables created successfully!")
-            
+        
         except sqlite3.Error as e:
             print(f"Error creating tables: {e}")
             self.conn.rollback()
