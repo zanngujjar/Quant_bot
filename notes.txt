@@ -50,7 +50,7 @@ Based on ticker and date from trade window table find option tickers for range b
     --T (PARTIAL)
         time to expiry:  purchase date-expiry/365 
 
-    --r
+    --r (DONE)
         need risk free rate for securities
         U.S. Treasury constant‑maturity series (FRED code DGS1MO, DGS3MO, DTB3)	Manual: download CSV from https://fred.stlouisfed.org.
         Script: fredapi → fred.get_series('DGS1MO', '2024‑12‑17') / 100.

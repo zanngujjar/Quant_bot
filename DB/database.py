@@ -197,6 +197,14 @@ class Database:
                 )
             """)
             
+            # Create risk_free_rates table
+            self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS risk_free_rates (
+                    observation_date DATE PRIMARY KEY,
+                    rate            NUMERIC(10,4) NOT NULL,
+                )
+            """)
+            
             self.conn.commit()
             print("Database tables created successfully!")
         
@@ -807,5 +815,102 @@ class Database:
             return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
         except sqlite3.Error as e:
             print(f"Error getting trade windows: {e}")
+            raise
+
+    def get_latest_risk_free_rate(self) -> Optional[Tuple[str, float]]:
+        """
+        Get the most recent risk-free rate record.
+        
+        Returns:
+            Tuple of (date, rate) for the most recent record, or None if no records exist
+        """
+        try:
+            self.cursor.execute("""
+                SELECT observation_date, rate 
+                FROM risk_free_rates 
+                ORDER BY observation_date DESC 
+                LIMIT 1
+            """)
+            
+            return self.cursor.fetchone()
+            
+        except sqlite3.Error as e:
+            print(f"Error getting latest risk-free rate: {e}")
+            raise
+
+    def set_risk_free_rate(self, date: str, rate: float) -> None:
+        """
+        Set or update the risk-free rate for a specific date.
+        
+        Args:
+            date: The date in YYYY-MM-DD format
+            rate: The risk-free rate value
+        """
+        try:
+            self.cursor.execute("""
+                INSERT OR REPLACE INTO risk_free_rates (observation_date, rate)
+                VALUES (?, ?)
+            """, (date, rate))
+            self.conn.commit()
+        except sqlite3.Error as e:
+            print(f"Error setting risk-free rate: {e}")
+            self.conn.rollback()
+            raise
+
+    def get_risk_free_rate(self, date: str) -> Optional[float]:
+        """
+        Get the risk-free rate for a specific date.
+        
+        Args:
+            date: The date in YYYY-MM-DD format
+            
+        Returns:
+            The risk-free rate value if found, None otherwise
+        """
+        try:
+            self.cursor.execute("""
+                SELECT rate FROM risk_free_rates 
+                WHERE observation_date = ?
+            """, (date,))
+            result = self.cursor.fetchone()
+            return result[0] if result else None
+        except sqlite3.Error as e:
+            print(f"Error getting risk-free rate: {e}")
+            raise
+
+    def get_all_risk_free_rates(self) -> List[Tuple[str, float]]:
+        """
+        Get all risk-free rates in the database.
+        
+        Returns:
+            List of tuples containing (date, rate) ordered by date
+        """
+        try:
+            self.cursor.execute("""
+                SELECT observation_date, rate 
+                FROM risk_free_rates 
+                ORDER BY observation_date
+            """)
+            return self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Error getting all risk-free rates: {e}")
+            raise
+
+    def get_all_tickers(self) -> List[Tuple[int, str]]:
+        """
+        Get all ticker IDs and symbols from the database.
+        
+        Returns:
+            List of tuples containing (ticker_id, symbol)
+        """
+        try:
+            self.cursor.execute("""
+                SELECT id, symbol
+                FROM tickers
+                ORDER BY symbol
+            """)
+            return self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Error getting all tickers: {e}")
             raise
 
