@@ -23,15 +23,96 @@ trade_window table
     trade_type BOOL
     unique constraint tickerid_1 ticker_id2 start_date end_date
 
-options
-Based on ticker and date from trade window table find option price 
-upload to db 
 
 
-calculate pnl based on trade 
-option price compared to start end date price 
 
 
+
+
+
+--Options
+
+
+
+
+(DONE)
+Based on ticker and date from trade window table find option tickers for range based on close price
+
+    todo:
+
+    --S(DONE) 
+        underlying close/mid price
+        
+
+    --K (DONE)
+        strike price option ticker
+
+    --T (PARTIAL)
+        time to expiry:  purchase date-expiry/365 
+
+    --r
+        need risk free rate for securities
+        U.S. Treasury constant‑maturity series (FRED code DGS1MO, DGS3MO, DTB3)	Manual: download CSV from https://fred.stlouisfed.org.
+        Script: fredapi → fred.get_series('DGS1MO', '2024‑12‑17') / 100.
+    --q
+        need dividend yeilds for underlying tickers
+
+    --P_obs 
+        (bid+ask) /2
+
+     --tt 
+        +1 call // -1 put
+
+
+Option Pricing Formula solving for IV:
+
+----Solve for σ (implied volatility) that makes Black-Scholes price equal P_obs:
+
+f(σ) = {
+    For Call: Se^(-qT)Φ(d₁) - Ke^(-rT)Φ(d₂) - P_obs
+    For Put:  Ke^(-rT)Φ(-d₂) - Se^(-qT)Φ(-d₁) - P_obs
+}
+
+Where:
+- S: Current stock price
+- K: Strike price
+- r: Risk-free interest rate
+- q: Dividend yield
+- T: Time to expiration
+- σ: Volatility (this is what we solve for)
+- Φ: Standard normal cumulative distribution function
+- P_obs: Observed option price
+
+And d₁, d₂ are given by:
+
+d₁ = [ln(S/K) + (r - q + 0.5σ²)T] / (σ√T)
+d₂ = d₁ - σ√T
+
+Note: We use numerical methods (e.g., Newton-Raphson) to solve for σ since 
+the equation cannot be solved analytically.
+    use brent if fails
+
+
+-----Option Greeks Formulas:
+
+Δ (Delta) = cp*e^(-qT) * Φ(cp*d₁)
+
+Γ (Gamma) = Se^(-qT) * φ(d₁) / (S*σ*√T)
+
+Θ (Theta) = -(S*σ*e^(-qT) * φ(d₁))/(2*√T) - cp*(r*K*e^(-rT)*Φ(cp*d₂) - q*S*e^(-qT)*Φ(cp*d₁))/365
+
+Vega = S*e^(-qT) * φ(d₁) * √T/100
+
+Where:
+- S: Stock price
+- K: Strike price
+- r: Risk-free rate
+- q: Dividend yield
+- T: Time to expiration
+- σ: Volatility
+- φ: Standard normal probability density function
+- Φ: Standard normal cumulative distribution function
+- cp: +1 for calls, -1 for puts
 
 
 MonteCarlo simulation
