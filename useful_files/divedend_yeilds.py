@@ -4,6 +4,7 @@ import datetime
 import pandas as pd
 import sys
 from dotenv import load_dotenv
+from tqdm import tqdm
 # Add the parent directory to the Python path to import the database module
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from DB.database import Database
@@ -13,25 +14,8 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 env_path = os.path.join(parent_dir, '.env')
 load_dotenv(env_path)
 
-API_KEY  = os.getenv("POLYGON_API_KEY")
+API_KEY = os.getenv("POLYGON_API_KEY")
 BASE = "https://api.polygon.io/v3/reference/dividends"
-
-def safe_date_convert(date_value) -> str:
-    """
-    Safely convert a date value to string format, handling NaT values
-    
-    Args:
-        date_value: Date value to convert
-        
-    Returns:
-        String date in YYYY-MM-DD format or None if invalid
-    """
-    try:
-        if pd.isna(date_value):
-            return None
-        return pd.to_datetime(date_value).strftime('%Y-%m-%d')
-    except Exception:
-        return None
 
 def get_dividend_data(ticker: str, days_back: int = 5*365) -> pd.DataFrame:
     """
@@ -78,7 +62,6 @@ def get_dividend_data(ticker: str, days_back: int = 5*365) -> pd.DataFrame:
             params = None  # next_url already has the API key
             
         if not all_rows:
-            print(f"No dividend data found for {ticker}")
             return pd.DataFrame()
             
         # Create DataFrame with all available columns
@@ -102,56 +85,65 @@ def get_dividend_data(ticker: str, days_back: int = 5*365) -> pd.DataFrame:
         print(f"Unexpected error for {ticker}: {e}")
         return pd.DataFrame()
 
-def analyze_dividend_history(ticker: str) -> None:
-    """
-    Analyze and display dividend history for a given ticker
-    
-    Args:
-        ticker: Stock ticker symbol
-    """
+def process_all_tickers() -> None:
+    """Process all tickers and store their dividend information in the database"""
     try:
-        # Get dividend data
-        df = get_dividend_data(ticker)
-        
-        if df.empty:
-            return
+        with Database() as db:
+            tickers = db.get_all_tickers()
+            all_dividends = []
             
-        print(f"\nDividend History for {ticker}:")
-        print("-" * 80)
-        
-        # Display dividend history
-        for _, row in df.iterrows():
-            ex_date = row['ex_dividend_date'].strftime('%Y-%m-%d')
-            pay_date = row['pay_date'].strftime('%Y-%m-%d') if pd.notna(row['pay_date']) else 'N/A'
-            amount = row['cash_amount']
-            div_type = row.get('dividend_type', 'N/A')
-            frequency = row.get('frequency', 'N/A')
+            # Create progress bar
+            pbar = tqdm(tickers, desc="Processing tickers", unit="ticker")
             
-            print(f"Ex-Date: {ex_date} | Pay Date: {pay_date} | Amount: ${amount:.2f} | Type: {div_type} | Frequency: {frequency}")
-        
-        # Calculate statistics
-        total_dividends = len(df)
-        total_amount = df['cash_amount'].sum()
-        avg_amount = df['cash_amount'].mean()
-        
-        print("\nSummary Statistics:")
-        print(f"Total Dividends: {total_dividends}")
-        print(f"Total Amount Paid: ${total_amount:.2f}")
-        print(f"Average Dividend: ${avg_amount:.2f}")
-        
-        # Calculate annual dividend growth
-        if len(df) >= 2:
-            first_div = df.iloc[-1]['cash_amount']
-            last_div = df.iloc[0]['cash_amount']
-            years = (df.iloc[0]['ex_dividend_date'] - df.iloc[-1]['ex_dividend_date']).days / 365.25
-            growth_rate = ((last_div / first_div) ** (1/years) - 1) * 100
+            for ticker_id, symbol in pbar:
+                pbar.set_description(f"Processing {symbol}")
+                
+                # Get dividend data
+                df = get_dividend_data(symbol)
+                
+                if df.empty:
+                    continue
+                
+                # Filter for CD and SC type dividends
+                df = df[df['dividend_type'].isin(['CD', 'SC'])]
+                
+                if df.empty:
+                    continue
+                
+                # Convert frequency to numeric value
+                def convert_frequency(freq):
+                    if pd.isna(freq):
+                        return 4  # Default to quarterly if unknown
+                    freq = str(freq).lower()
+                    if 'annual' in freq or 'yearly' in freq:
+                        return 1
+                    elif 'semi-annual' in freq or 'semi annual' in freq:
+                        return 2
+                    elif 'quarterly' in freq:
+                        return 4
+                    elif 'monthly' in freq:
+                        return 12
+                    return 4  # Default to quarterly
+                
+                # Collect dividend data in tuples
+                for _, row in df.iterrows():
+                    ex_date = row['ex_dividend_date'].strftime('%Y-%m-%d')
+                    amount = float(row['cash_amount'])
+                    div_type = row.get('dividend_type', 'CD')
+                    frequency = convert_frequency(row.get('frequency', 'quarterly'))
+                    
+                    all_dividends.append((symbol, ex_date, amount, div_type, frequency))
             
-            print(f"Annual Dividend Growth Rate: {growth_rate:.2f}%")
-        
+            # Batch upload all dividends
+            if all_dividends:
+                print(f"\nUploading {len(all_dividends)} dividend records...")
+                db.add_dividends_batch(all_dividends)
+                print("Upload complete!")
+            else:
+                print("No dividend records found to upload.")
+                
     except Exception as e:
-        print(f"Error analyzing dividend history for {ticker}: {e}")
+        print(f"Error processing tickers: {e}")
 
 if __name__ == "__main__":
-    # Example usage
-    ticker = "AAPL"
-    analyze_dividend_history(ticker)
+    process_all_tickers()

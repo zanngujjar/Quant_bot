@@ -201,7 +201,19 @@ class Database:
             self.cursor.execute("""
                 CREATE TABLE IF NOT EXISTS risk_free_rates (
                     observation_date DATE PRIMARY KEY,
-                    rate            NUMERIC(10,4) NOT NULL,
+                    rate            NUMERIC(10,4) NOT NULL
+                )
+            """)
+            
+            # Create dividends table
+            self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS dividends (
+                    ticker          TEXT        NOT NULL,     
+                    ex_div_date     DATE        NOT NULL,      
+                    cash_amount     NUMERIC(10,4)  NOT NULL,   
+                    dividend_type   CHAR(2)     NOT NULL,      
+                    frequency       SMALLINT    NOT NULL,   
+                    PRIMARY KEY (ticker, ex_div_date)
                 )
             """)
             
@@ -912,5 +924,138 @@ class Database:
             return self.cursor.fetchall()
         except sqlite3.Error as e:
             print(f"Error getting all tickers: {e}")
+            raise
+
+    def add_dividend(self, ticker: str, ex_div_date: str, cash_amount: float, 
+                    dividend_type: str, frequency: int) -> None:
+        """
+        Add a single dividend record to the database.
+        
+        Args:
+            ticker: Stock symbol
+            ex_div_date: Ex-dividend date in YYYY-MM-DD format
+            cash_amount: Per-share cash amount
+            dividend_type: Type of dividend ('CD', 'SC', 'LT', 'ST')
+            frequency: Dividend frequency (1, 4, 12, etc.)
+        """
+        try:
+            self.cursor.execute("""
+                INSERT OR REPLACE INTO dividends 
+                (ticker, ex_div_date, cash_amount, dividend_type, frequency)
+                VALUES (?, ?, ?, ?, ?)
+            """, (ticker, ex_div_date, cash_amount, dividend_type, frequency))
+            self.conn.commit()
+        except sqlite3.Error as e:
+            print(f"Error adding dividend: {e}")
+            self.conn.rollback()
+            raise
+
+    def add_dividends_batch(self, dividends: List[Tuple[str, str, float, str, int]]) -> None:
+        """
+        Add multiple dividend records in a single transaction.
+        
+        Args:
+            dividends: List of tuples, each containing:
+                (ticker, ex_div_date, cash_amount, dividend_type, frequency)
+        """
+        try:
+            self.cursor.executemany("""
+                INSERT OR REPLACE INTO dividends 
+                (ticker, ex_div_date, cash_amount, dividend_type, frequency)
+                VALUES (?, ?, ?, ?, ?)
+            """, dividends)
+            self.conn.commit()
+        except sqlite3.Error as e:
+            print(f"Error adding dividends in batch: {e}")
+            self.conn.rollback()
+            raise
+
+    def get_dividends(self, ticker: Optional[str] = None, 
+                     start_date: Optional[str] = None,
+                     end_date: Optional[str] = None) -> List[Tuple]:
+        """
+        Get dividend records, optionally filtered by ticker and date range.
+        
+        Args:
+            ticker: Optional ticker symbol to filter by
+            start_date: Optional start date in YYYY-MM-DD format
+            end_date: Optional end date in YYYY-MM-DD format
+            
+        Returns:
+            List of tuples containing (ticker, ex_div_date, cash_amount, dividend_type, frequency)
+        """
+        try:
+            query = "SELECT * FROM dividends"
+            params = []
+            
+            conditions = []
+            if ticker:
+                conditions.append("ticker = ?")
+                params.append(ticker)
+            if start_date:
+                conditions.append("ex_div_date >= ?")
+                params.append(start_date)
+            if end_date:
+                conditions.append("ex_div_date <= ?")
+                params.append(end_date)
+                
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+                
+            query += " ORDER BY ticker, ex_div_date DESC"
+            
+            self.cursor.execute(query, params)
+            return self.cursor.fetchall()
+            
+        except sqlite3.Error as e:
+            print(f"Error getting dividends: {e}")
+            raise
+
+    def get_latest_dividend(self, ticker: str) -> Optional[Tuple]:
+        """
+        Get the most recent dividend record for a ticker.
+        
+        Args:
+            ticker: Stock symbol
+            
+        Returns:
+            Tuple containing (ticker, ex_div_date, cash_amount, dividend_type, frequency)
+            or None if no dividend found
+        """
+        try:
+            self.cursor.execute("""
+                SELECT * FROM dividends 
+                WHERE ticker = ? 
+                ORDER BY ex_div_date DESC 
+                LIMIT 1
+            """, (ticker,))
+            return self.cursor.fetchone()
+        except sqlite3.Error as e:
+            print(f"Error getting latest dividend: {e}")
+            raise
+
+    def get_dividend_frequency(self, ticker: str) -> Optional[int]:
+        """
+        Get the most common dividend frequency for a ticker.
+        
+        Args:
+            ticker: Stock symbol
+            
+        Returns:
+            Most common frequency value or None if no dividends found
+        """
+        try:
+            self.cursor.execute("""
+                SELECT frequency, COUNT(*) as count
+                FROM dividends
+                WHERE ticker = ?
+                GROUP BY frequency
+                ORDER BY count DESC
+                LIMIT 1
+            """, (ticker,))
+            result = self.cursor.fetchone()
+            return result[0] if result else None
+        except sqlite3.Error as e:
+            print(f"Error getting dividend frequency: {e}")
             raise
 
