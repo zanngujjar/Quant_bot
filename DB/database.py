@@ -59,6 +59,17 @@ class Database:
             self.conn.rollback()
             raise
 
+    def drop_15min_table(self) -> None:
+        """Drop only the ticker_prices_15min table"""
+        try:
+            self.cursor.execute("DROP TABLE IF EXISTS ticker_prices_15min")
+            self.conn.commit()
+            print("ticker_prices_15min table dropped successfully!")
+        except sqlite3.Error as e:
+            print(f"Error dropping ticker_prices_15min table: {e}")
+            self.conn.rollback()
+            raise
+
     def create_tables(self) -> None:
         """Create all required tables if they don't exist"""
         try:
@@ -215,6 +226,36 @@ class Database:
                     frequency       SMALLINT    NOT NULL,   
                     PRIMARY KEY (ticker, ex_div_date)
                 )
+            """)
+            
+            # Create ticker_prices_15min table
+            self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ticker_prices_15min (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticker_id      INTEGER NOT NULL,
+                    ticker_symbol  TEXT NOT NULL,
+                    bar_date       DATE NOT NULL,
+                    bar_time       TEXT NOT NULL,
+                    open_price     REAL NOT NULL,
+                    high_price     REAL NOT NULL,
+                    low_price      REAL NOT NULL,
+                    close_price    REAL NOT NULL,
+                    volume         INTEGER NOT NULL,
+                    nanosecond     BIGINT,
+                    UNIQUE(ticker_id, bar_date, bar_time),
+                    FOREIGN KEY (ticker_id) REFERENCES tickers(id)
+                )
+            """)
+            
+            # Create indexes for ticker_prices_15min
+            self.cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bars_ticker_datetime 
+                ON ticker_prices_15min(ticker_id, bar_date, bar_time)
+            """)
+            
+            self.cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bars_date_time 
+                ON ticker_prices_15min(bar_date, bar_time)
             """)
             
             self.conn.commit()
@@ -1057,5 +1098,176 @@ class Database:
             return result[0] if result else None
         except sqlite3.Error as e:
             print(f"Error getting dividend frequency: {e}")
+            raise
+
+    def add_15min_price(self, ticker_id: int, ticker_symbol: str, bar_date: str, bar_time: str,
+                       open_price: float, high_price: float, low_price: float, 
+                       close_price: float, volume: int, nanosecond: int) -> int:
+        """
+        Add a single 15-minute price record to the database.
+        
+        Args:
+            ticker_id: ID of the ticker
+            ticker_symbol: Symbol of the ticker
+            bar_date: Date of the bar in YYYY-MM-DD format
+            bar_time: Time of the bar in HH:MM:SS format
+            open_price: Opening price
+            high_price: Highest price
+            low_price: Lowest price
+            close_price: Closing price
+            volume: Trading volume
+            nanosecond: Nanosecond timestamp
+            
+        Returns:
+            The ID of the inserted record
+        """
+        try:
+            self.cursor.execute("""
+                INSERT OR REPLACE INTO ticker_prices_15min 
+                (ticker_id, ticker_symbol, bar_date, bar_time, 
+                 open_price, high_price, low_price, close_price, volume, nanosecond)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (ticker_id, ticker_symbol, bar_date, bar_time,
+                  open_price, high_price, low_price, close_price, volume, nanosecond))
+            self.conn.commit()
+            return self.cursor.lastrowid
+        except sqlite3.Error as e:
+            print(f"Error adding 15min price: {e}")
+            self.conn.rollback()
+            raise
+
+    def add_15min_prices_batch(self, prices: List[Tuple]) -> None:
+        """
+        Add multiple 15-minute price records in a single transaction.
+        
+        Args:
+            prices: List of tuples, each containing:
+                (ticker_id, ticker_symbol, bar_date, bar_time, 
+                 open_price, high_price, low_price, close_price, volume, nanosecond)
+        """
+        try:
+            self.cursor.executemany("""
+                INSERT OR REPLACE INTO ticker_prices_15min 
+                (ticker_id, ticker_symbol, bar_date, bar_time, 
+                 open_price, high_price, low_price, close_price, volume, nanosecond)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, prices)
+            self.conn.commit()
+        except sqlite3.Error as e:
+            print(f"Error adding 15min prices in batch: {e}")
+            self.conn.rollback()
+            raise
+
+    def get_15min_prices_by_ticker(self, ticker_id: int, 
+                                 start_date: Optional[str] = None,
+                                 end_date: Optional[str] = None,
+                                 start_nanosecond: Optional[int] = None,
+                                 end_nanosecond: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Get 15-minute price data for a specific ticker within a date range.
+        
+        Args:
+            ticker_id: ID of the ticker
+            start_date: Optional start date in YYYY-MM-DD format
+            end_date: Optional end date in YYYY-MM-DD format
+            start_nanosecond: Optional start nanosecond timestamp
+            end_nanosecond: Optional end nanosecond timestamp
+            
+        Returns:
+            List of dictionaries containing price data
+        """
+        try:
+            query = """
+                SELECT * FROM ticker_prices_15min
+                WHERE ticker_id = ?
+            """
+            params = [ticker_id]
+            
+            if start_date:
+                query += " AND (bar_date > ? OR (bar_date = ? AND (bar_time > ? OR (bar_time = ? AND nanosecond >= ?))))"
+                params.extend([start_date, start_date, start_time, start_time, start_nanosecond])
+            if end_date:
+                query += " AND (bar_date < ? OR (bar_date = ? AND (bar_time < ? OR (bar_time = ? AND nanosecond <= ?))))"
+                params.extend([end_date, end_date, end_time, end_time, end_nanosecond])
+                
+            query += " ORDER BY bar_date, bar_time, nanosecond"
+            
+            self.cursor.execute(query, params)
+            columns = [desc[0] for desc in self.cursor.description]
+            return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+            
+        except sqlite3.Error as e:
+            print(f"Error getting 15min prices by ticker: {e}")
+            raise
+
+    def get_15min_prices_by_date_range(self, start_date: str, end_date: str,
+                                     start_time: Optional[str] = None,
+                                     end_time: Optional[str] = None,
+                                     start_nanosecond: Optional[int] = None,
+                                     end_nanosecond: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Get 15-minute price data within a date and time range.
+        
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+            start_time: Optional start time in HH:MM:SS format
+            end_time: Optional end time in HH:MM:SS format
+            start_nanosecond: Optional start nanosecond timestamp
+            end_nanosecond: Optional end nanosecond timestamp
+            
+        Returns:
+            List of dictionaries containing price data
+        """
+        try:
+            query = """
+                SELECT * FROM ticker_prices_15min
+                WHERE bar_date >= ? AND bar_date <= ?
+            """
+            params = [start_date, end_date]
+            
+            if start_time:
+                query += " AND (bar_date > ? OR (bar_date = ? AND (bar_time > ? OR (bar_time = ? AND nanosecond >= ?))))"
+                params.extend([start_date, start_date, start_time, start_time, start_nanosecond])
+            if end_time:
+                query += " AND (bar_date < ? OR (bar_date = ? AND (bar_time < ? OR (bar_time = ? AND nanosecond <= ?))))"
+                params.extend([end_date, end_date, end_time, end_time, end_nanosecond])
+                
+            query += " ORDER BY bar_date, bar_time, nanosecond"
+            
+            self.cursor.execute(query, params)
+            columns = [desc[0] for desc in self.cursor.description]
+            return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+            
+        except sqlite3.Error as e:
+            print(f"Error getting 15min prices by date range: {e}")
+            raise
+
+    def get_latest_15min_price(self, ticker_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recent 15-minute price record for a ticker.
+        
+        Args:
+            ticker_id: ID of the ticker
+            
+        Returns:
+            Dictionary containing the latest price data or None if no data exists
+        """
+        try:
+            self.cursor.execute("""
+                SELECT * FROM ticker_prices_15min
+                WHERE ticker_id = ?
+                ORDER BY bar_date DESC, bar_time DESC, nanosecond DESC
+                LIMIT 1
+            """, (ticker_id,))
+            
+            result = self.cursor.fetchone()
+            if result:
+                columns = [desc[0] for desc in self.cursor.description]
+                return dict(zip(columns, result))
+            return None
+            
+        except sqlite3.Error as e:
+            print(f"Error getting latest 15min price: {e}")
             raise
 
