@@ -1,0 +1,64 @@
+import cudf
+import cupy as cp
+
+def test_filtering():
+    # Read parquet file
+    logs = cudf.read_parquet("log_prices.parquet")
+    
+    # ── BEGINNING STATS ──────────────────────────────────────────────────────────
+    print("="*60)
+    print("BEGINNING STATS:")
+    print(f"Unique ticker IDs: {logs['ticker_id'].nunique()}")
+    print(f"Total rows: {len(logs)}")
+    print("="*60)
+    
+    # ── Filter out ticker_ids that do not have data on 2022-02-22 ─────────────
+    # Identify which ticker_ids have an entry on '2022-02-22'
+    has_date = logs[logs['date'] == '2022-02-22']['ticker_id'].unique()
+    print(f"Tickers with data on 2022-02-22: {len(has_date)}")
+    # Keep only rows whose ticker_id is in has_date
+    logs = logs[logs['ticker_id'].isin(has_date)]
+    print(f"Number of unique ticker IDs after date filtering: {logs['ticker_id'].nunique()}")
+    
+    # ── Filter out any 90‐day window where log_price implies price < $5 ──────
+    # Compute actual price from log_price
+    logs = logs.assign(price=cp.exp(logs['log_price']))
+    # Flag days where price < $5
+    logs = logs.assign(under5=(logs['price'] < 5).astype('int32'))
+    # Sort by ticker and date for rolling
+    logs = logs.sort_values(['ticker_id','date'])
+    
+    # Compute for each ticker the rolling max of under5 over PREVIOUS 90 days (no look-ahead bias)
+    logs['had_under5_90'] = (
+        logs
+        .groupby('ticker_id')['under5']
+        .shift(1)  # Shift by 1 to exclude current day
+        .rolling(window=90, min_periods=1)
+        .max()
+        .reset_index(level=0, drop=True)
+    )
+    # Keep only rows where no under‐$5 occurred in prior 90 days
+    logs = logs[logs['had_under5_90'] == 0]
+    print(f"Number of unique ticker IDs after under-$5 filter: {logs['ticker_id'].nunique()}")
+    
+    # ── After filtering, drop helper columns (keep log_price) ─────────────────
+    logs = logs.drop(columns=["price","under5","had_under5_90"])
+    
+    # ── Filter out tickers with fewer than 800 rows ──────────────────────────
+    ticker_counts = logs['ticker_id'].value_counts()
+    print(f"Tickers with < 800 rows: {(ticker_counts < 800).sum()}")
+    
+    # Keep only tickers with at least 800 rows
+    valid_tickers = ticker_counts[ticker_counts >= 800].index
+    logs = logs[logs['ticker_id'].isin(valid_tickers)]
+    print(f"Number of unique ticker IDs after 800-row filter: {logs['ticker_id'].nunique()}")
+    
+    # ── FINAL STATS ──────────────────────────────────────────────────────────────
+    print("="*60)
+    print("FINAL STATS:")
+    print(f"Unique ticker IDs: {logs['ticker_id'].nunique()}")
+    print(f"Total rows: {len(logs)}")
+    print("="*60)
+
+if __name__ == "__main__":
+    test_filtering()

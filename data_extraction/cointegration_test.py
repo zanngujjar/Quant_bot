@@ -77,10 +77,12 @@ def run_engle_granger_test(log_prices: Dict[Tuple[str, str], List[Tuple[str, flo
             if p_value < 0.05:
                 # Fit OLS model to get beta
                 model = sm.OLS(x, sm.add_constant(y)).fit()
+                alpha = model.params[0]
                 beta = model.params[1]
                 
                 results[pair] = {
                     'p_value': p_value,
+                    'alpha': alpha,
                     'beta': beta,
                     'test_date': datetime.now().date()
                 }
@@ -160,12 +162,13 @@ def analyze_pairs(
                                 ticker_id_1=ticker_id_1,
                                 ticker_id_2=ticker_id_2,
                                 p_value=result['p_value'],
+                                alpha=result['alpha'],
                                 beta=result['beta'],
                                 test_date=test_date
                             )
                             
                             processed_count += 1
-                            print(f"  {pair[0]}/{pair[1]}: p-value={result['p_value']:.6f}, beta={result['beta']:.4f}")
+                            print(f"  {pair[0]}/{pair[1]}: p-value={result['p_value']:.6f}, beta={result['beta']:.4f}, alpha={result['alpha']:.4f}")
                         except Exception as e:
                             print(f"Error storing results for pair {pair}: {str(e)}")
                             continue
@@ -177,5 +180,5 @@ def analyze_pairs(
         raise
 
 if __name__ == "__main__":
-    analyze_pairs()
+    analyze_pairs(use_cointegration=False)
 

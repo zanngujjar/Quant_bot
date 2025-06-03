@@ -5,8 +5,6 @@ db = Database()  # or Database('/path/to/your/QUANT.db')
 
 # Connect to the database
 db.connect()
-
-
+db.drop_cointegration_table()
 db.create_tables()
-
 db.close()

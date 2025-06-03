@@ -1,0 +1,16 @@
+tickers 1 206
+
+pull ticker prices  def get_ticker_price_ids(self, ticker_id: int) -> List[Tuple[int, str]]:
+        """
+        Get all price IDs and dates for a given ticker ID.
+        
+        Args:
+            ticker_id: The ID of the ticker to get price IDs for
+            
+        Returns:
+            List of tuples containing (price_id, date) ordered by date
+"""
+pull log prices  def get_log_price_ids_batch(self, ticker_price_ids: List[int]) -> Dict[int, int]:
+    
+then for every day we find the rolling 90 day cointigration test alpha beta and p value and store it in the database
+we repeat this every day for the ticker pair 1 206

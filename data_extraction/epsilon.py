@@ -17,6 +17,7 @@ try:
     # Split the data into pairs and betas
     cointegrated_pairs = [(pair[0], pair[1]) for pair in cointegrated_data]
     betas = {(pair[0], pair[1]): pair[2] for pair in cointegrated_data}
+    alphas = {(pair[0], pair[1]): pair[3] for pair in cointegrated_data}
     
     # Get log prices for all cointegrated pairs (180 days)
     pair_prices = db.get_latest_log_prices_for_pairs(cointegrated_pairs, days=180)
@@ -33,13 +34,14 @@ try:
         
         # Get the beta for this pair
         beta = betas[pair]
-        
+        alpha = alphas[pair]
+
         # Ensure date is datetime and sorted
         df['date'] = pd.to_datetime(df['date'])
         df = df.sort_values('date')
         
-        # Calculate spread: spread = A - βB
-        df['spread'] = df[pair[0]] - beta * df[pair[1]]
+        # Calculate spread: spread = A - alpha - βB
+        df['spread'] = df[pair[0]] - alpha - beta * df[pair[1]]
         
         # Initialize result columns
         df['rolling_mean'] = np.nan

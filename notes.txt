@@ -54,20 +54,20 @@ Based on ticker and date from trade window table find option tickers for range b
         need risk free rate for securities
         U.S. Treasury constant‑maturity series (FRED code DGS1MO, DGS3MO, DTB3)	Manual: download CSV from https://fred.stlouisfed.org.
         Script: fredapi → fred.get_series('DGS1MO', '2024‑12‑17') / 100.
-    --q
+    --q (DONE)
         need dividend yeilds for underlying tickers
 
-    --P_obs 
+    --P_obs (ALMOST)
         (bid+ask) /2
 
-     --tt 
+     --tt (DONE)
         +1 call // -1 put
 
 
 Option Pricing Formula solving for IV:
 
 ----Solve for σ (implied volatility) that makes Black-Scholes price equal P_obs:
-
+DONE!!
 f(σ) = {
     For Call: Se^(-qT)Φ(d₁) - Ke^(-rT)Φ(d₂) - P_obs
     For Put:  Ke^(-rT)Φ(-d₂) - Se^(-qT)Φ(-d₁) - P_obs
@@ -95,7 +95,7 @@ the equation cannot be solved analytically.
 
 -----Option Greeks Formulas:
 
-Δ (Delta) = cp*e^(-qT) * Φ(cp*d₁)
+(DONE) Δ (Delta) = cp*e^(-qT) * Φ(cp*d₁)
 
 Γ (Gamma) = Se^(-qT) * φ(d₁) / (S*σ*√T)
 
@@ -121,3 +121,113 @@ MonteCarlo simulation
 
 
 
+Program Logic Outline
+
+1. Data Ingestion & Preprocessing
+
+Universe filtering: select tickers with ≥2 years of historical daily price data (≈504 trading days).
+
+Load prices:
+
+Daily OHLCV for past 5 years (≈1,260 days).
+
+15‑minute OHLCV bars for intraday back‑test days.
+
+Compute log prices and store rolling statistics (already in place: 30‑day, 90‑day means/std).
+
+2. Initial Pair Screening
+
+Option A: Correlation filter (optional):
+
+Compute daily Pearson ρ over 504-day window for all pairs (5,718×5,717/2 ≈16M).
+
+Retain pairs with |ρ| ≥ 0.80.
+
+Option B: Skip correlation if using GPU-accelerated cointegration (next step) directly.
+
+3. Rolling Daily Cointegration Fit
+For each trading day d in [start + 90, end]:
+
+Window: last 90 daily log-prices for each candidate pair.
+
+Compute α, β via closed‑form OLS on GPU (Cov/Var or vectorized CuPy).
+
+Compute residuals: ε_i = lnP2_i – α – β·lnP1_i.
+
+Compute μ(d), σ(d) of those 90 residuals.
+
+Store (daily_coint_params): (date=d, ticker1, ticker2, α, β, μ, σ).
+
+4. Intraday 15‑min Z‑Score Scan
+For each day d:
+
+Fetch (α_d, β_d, μ_d, σ_d) for all pairs.
+
+Load 15‑min log-prices for that day: lnP1[t_i], lnP2[t_i], nanosecond stamps.
+
+GPU batch compute:
+
+ε[t_i,p] = lnP2 – α_d – β_d·lnP1
+
+z[t_i,p] = (ε – μ_d)/σ_d
+
+Detect triggers: find first bar index i where |z| ≥ entry_z.
+
+Record trade event with precise timestamp (bar_date, bar_time, nanoseconds).
+
+5. Option Leg & P_obs Retrieval
+For each trade event:
+
+Query option chain snapshot at entry as_of = entry_t_ms.
+
+Filter strikes ±15%, expiries 20–45 days.
+
+Fetch P_obs:
+
+/v3/trades/{optTicker}?timestamp.gte=entry_ns&timestamp.lt=entry_ns+window
+
+Compute implied vol via BS inversion, then derive Greeks.
+
+Trade decision: check greeks vs strategy rules.
+
+6. Exit & PnL
+
+Exit logic: use same day’s z-score exit threshold or time/stop rule.
+
+Fetch P_exit with nanosecond stamp at exit bar.
+
+Calculate PnL = (P_exit – P_entry)×100 contracts.
+
+7. Monte Carlo Stress Tests
+
+Perturb underlying log-prices by ±k·σ (or bootstrap daily returns).
+
+Resample risk-free rates/dividends for each scenario.
+
+Re-run option-pricing & PnL 1,000× in parallel (GPU/Numba) to build distribution.
+
+8. Performance Optimizations
+
+GPU acceleration: cointegration α/β, ε/z, Monte Carlo.
+
+Pruning: correlation + sector clustering.
+
+Parallelism: 16‑core CPU for I/O & DB writes.
+
+Caching: risk-free/dividend lookups.
+
+9. End‑to‑End Backtest Flow
+
+Ingest & preprocess prices
+
+Daily rolling cointegration → store params
+
+Daily intraday z-scan → record events
+
+Option P_obs & Greeks → generate trades
+
+Exit & compute PnL → store results
+
+Monte Carlo portfolio analysis
+
+This outline ensures each day uses its own α/β/μ/σ, captures intraday timing, and leverages GPU/parallelism for scale.

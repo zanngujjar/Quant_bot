@@ -58,7 +58,16 @@ class Database:
             print(f"Error dropping tables: {e}")
             self.conn.rollback()
             raise
-
+    def drop_cointegration_table(self) -> None:
+        """Drop only the cointegration_tests table"""
+        try:
+            self.cursor.execute("DROP TABLE IF EXISTS cointegration_tests")
+            self.conn.commit()
+            print("cointegration_tests table dropped successfully!")
+        except sqlite3.Error as e:
+            print(f"Error dropping cointegration_tests table: {e}")
+            self.conn.rollback()
+            raise
     def drop_15min_table(self) -> None:
         """Drop only the ticker_prices_15min table"""
         try:
@@ -69,7 +78,28 @@ class Database:
             print(f"Error dropping ticker_prices_15min table: {e}")
             self.conn.rollback()
             raise
-
+    def drop_trade_window_table(self) -> None:
+        """Drop only the trade_window table"""
+        try:
+            self.cursor.execute("DROP TABLE IF EXISTS trade_window")
+            self.conn.commit()
+            print("trade_window table dropped successfully!")
+        except sqlite3.Error as e:
+            print(f"Error dropping trade_window table: {e}")
+            self.conn.rollback()
+            raise
+        
+    def drop_epsilon_table(self) -> None:
+        """Drop only the epsilon_prices table"""
+        try:
+            self.cursor.execute("DROP TABLE IF EXISTS epsilon_prices")
+            self.conn.commit()
+            print("epsilon_prices table dropped successfully!")
+        except sqlite3.Error as e:
+            print(f"Error dropping epsilon_prices table: {e}")
+            self.conn.rollback()
+            raise
+            
     def create_tables(self) -> None:
         """Create all required tables if they don't exist"""
         try:
@@ -132,6 +162,7 @@ class Database:
                 ticker_id_1    INTEGER   NOT NULL,
                 ticker_id_2    INTEGER   NOT NULL,
                 p_value        REAL,
+                alpha          REAL,
                 beta           REAL,
                 test_date      DATE      NOT NULL,
                 CONSTRAINT     uix_coint_pair_date UNIQUE (ticker_id_1, ticker_id_2, test_date),
@@ -343,14 +374,14 @@ class Database:
             raise
 
     def add_cointegration_test(self, ticker_id_1: int, ticker_id_2: int, 
-                             p_value: float, beta: float, test_date: str) -> None:
+                             p_value: float, alpha: float, beta: float, test_date: str) -> None:
         """Add cointegration test results for a pair of tickers"""
         try:
             self.cursor.execute("""
                 INSERT OR REPLACE INTO cointegration_tests 
-                (ticker_id_1, ticker_id_2, p_value, beta, test_date) 
-                VALUES (?, ?, ?, ?, ?)
-            """, (ticker_id_1, ticker_id_2, p_value, beta, test_date))
+                (ticker_id_1, ticker_id_2, p_value, alpha, beta, test_date) 
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (ticker_id_1, ticker_id_2, p_value, alpha, beta, test_date))
             
             self.conn.commit()
             
@@ -403,7 +434,7 @@ class Database:
         except sqlite3.Error as e:
             print(f"Error getting ticker ID: {e}")
             raise
-
+    
     def get_ticker_symbol(self, ticker_id: int) -> Optional[str]:
         """Get the symbol of a ticker by its ID
         
@@ -420,6 +451,14 @@ class Database:
             
         except sqlite3.Error as e:
             print(f"Error getting ticker symbol: {e}")
+            raise
+    def get_tickers(self) -> List[Tuple[int, str]]:
+        """Get all tickers from the tickers table"""
+        try:
+            self.cursor.execute("SELECT id, symbol FROM tickers")
+            return self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Error getting tickers: {e}")
             raise
 
     def get_ticker_prices(self, ticker_id: int, start_date: Optional[str] = None, 
@@ -467,7 +506,7 @@ class Database:
             print(f"Error getting high correlations: {e}")
             raise
 
-    def get_cointegrated_pairs(self, max_p_value: float = 0.05) -> List[Tuple]:
+    def get_cointegrated_pairs(self, max_p_value: float = 1.0) -> List[Tuple]:
         """Get all cointegrated pairs below a maximum p-value threshold"""
         try:
             self.cursor.execute("""
@@ -545,11 +584,11 @@ class Database:
             print(f"Error getting high correlation pairs: {e}")
             raise
 
-    def get_latest_cointegrated_pairs(self, max_p_value: float = 0.05) -> List[Tuple[str, str, float]]:
+    def get_latest_cointegrated_pairs(self, max_p_value: float = 0.05) -> List[Tuple[str, str, float, float]]:
         """Get all ticker pairs that are cointegrated below the p-value threshold from the most recent test date
         
         Returns:
-            List of tuples containing (ticker1_symbol, ticker2_symbol, beta)
+            List of tuples containing (ticker1_symbol, ticker2_symbol, beta, alpha)
         """
         try:
             self.cursor.execute("""
@@ -557,7 +596,7 @@ class Database:
                     SELECT MAX(test_date) as max_date
                     FROM cointegration_tests
                 )
-                SELECT DISTINCT t1.symbol, t2.symbol, ct.beta
+                SELECT DISTINCT t1.symbol, t2.symbol, ct.beta, ct.alpha
                 FROM cointegration_tests ct
                 JOIN tickers t1 ON ct.ticker_id_1 = t1.id
                 JOIN tickers t2 ON ct.ticker_id_2 = t2.id
@@ -711,15 +750,15 @@ class Database:
             self.conn.rollback()
             raise
 
-    def get_log_price_ids_batch(self, ticker_price_ids: List[int]) -> Dict[int, int]:
+    def get_log_price_ids_batch(self, ticker_price_ids: List[int]) -> Dict[int, float]:
         """
-        Get log price IDs for a batch of ticker price IDs
+        Get log price values for a batch of ticker price IDs
         
         Args:
             ticker_price_ids: List of ticker_price_id values
             
         Returns:
-            Dictionary mapping ticker_price_id to log_price.id
+            Dictionary mapping ticker_price_id to log_price value
         """
         try:
             if not ticker_price_ids:
@@ -727,7 +766,7 @@ class Database:
                 
             placeholders = ','.join(['?' for _ in ticker_price_ids])
             query = f"""
-                SELECT ticker_price_id, id
+                SELECT ticker_price_id, log_price
                 FROM log_prices
                 WHERE ticker_price_id IN ({placeholders})
             """
@@ -736,7 +775,7 @@ class Database:
             return dict(self.cursor.fetchall())
             
         except sqlite3.Error as e:
-            print(f"Error getting log price IDs in batch: {e}")
+            print(f"Error getting log prices in batch: {e}")
             raise
 
     def get_log_price_id_from_ticker_price(self, ticker_price_id: int) -> Optional[int]:
@@ -1269,5 +1308,51 @@ class Database:
             
         except sqlite3.Error as e:
             print(f"Error getting latest 15min price: {e}")
+            raise
+
+    def get_ticker_price_ids(self, ticker_id: int) -> List[Tuple[int, str]]:
+        """
+        Get all price IDs and dates for a given ticker ID.
+        
+        Args:
+            ticker_id: The ID of the ticker to get price IDs for
+            
+        Returns:
+            List of tuples containing (price_id, date) ordered by date
+        """
+        try:
+            query = """
+                SELECT id, date
+                FROM ticker_prices
+                WHERE ticker_id = ?
+                ORDER BY date
+            """
+            
+            self.cursor.execute(query, (ticker_id,))
+            return self.cursor.fetchall()
+            
+        except sqlite3.Error as e:
+            print(f"Error getting ticker price IDs: {e}")
+            raise
+
+    def get_all_ticker_ids(self) -> List[int]:
+        """
+        Get all ticker IDs from the tickers table.
+        
+        Returns:
+            List of ticker IDs ordered by symbol
+        """
+        try:
+            query = """
+                SELECT id
+                FROM tickers
+                ORDER BY symbol
+            """
+            
+            self.cursor.execute(query)
+            return [row[0] for row in self.cursor.fetchall()]
+            
+        except sqlite3.Error as e:
+            print(f"Error getting all ticker IDs: {e}")
             raise
 
