@@ -147,6 +147,119 @@ def get_price_obs(symbol: str, Date: str) -> float:
     except Exception as e:
         return None  # Silent return on any other errors
 
+def get_option_vol(option_ticker: str, date: str) -> dict:
+    """
+    Fetch daily aggregated OHLCV data for an options contract.
+    
+    Args:
+        option_ticker (str): The ticker symbol of the options contract
+        date (str): Date in YYYY-MM-DD format
+    
+    Returns:
+        dict: Daily OHLCV data with structure:
+        {
+            'ticker': str,
+            'results': [{
+                'c': float,  # close price
+                'h': float,  # high price
+                'l': float,  # low price
+                'o': float,  # open price
+                'v': float,  # volume
+                'n': int,    # number of transactions
+                'vw': float  # volume weighted average price
+            }]
+        }
+    """
+    # API endpoint for daily aggregates
+    url = f"https://api.polygon.io/v2/aggs/ticker/{option_ticker}/range/1/day/{date}/{date}"
+    
+    # Query parameters
+    params = {
+        'adjusted': 'true',
+        'sort': 'asc',
+        'limit': 1,
+        'apiKey': API_KEY
+    }
+    
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if data['status'] != 'OK' or not data.get('results'):
+            return None
+            
+        return data
+        
+    except requests.RequestException as e:
+        print(f"Error fetching data for {option_ticker}: {str(e)}")
+        return None
+    except Exception as e:
+        print(f"Unexpected error for {option_ticker}: {str(e)}")
+        return None
+
+def get_option_quotes(option_ticker: str, entry_day: str ) -> dict:
+    """
+    Fetch a single quote for an options contract at a specific nanosecond timestamp.
+    
+    Args:
+        option_ticker (str): The ticker symbol of the options contract
+        nanosecond (int): The nanosecond timestamp to query
+    
+    Returns:
+        dict: Quote data with structure:
+        {
+            'results': [{
+                'bid_price': float,    # bid price
+                'bid_size': int,       # bid size in round lots
+                'ask_price': float,    # ask price
+                'ask_size': int,       # ask size in round lots
+                'bid_exchange': int,   # bid exchange ID
+                'ask_exchange': int,   # ask exchange ID
+                'sequence_number': int,# sequence number of the quote
+                'sip_timestamp': int   # nanosecond timestamp
+            }],
+            'status': str,
+            'request_id': str
+        }
+    """
+    # API endpoint for quotes
+    url = f"https://api.polygon.io/v3/quotes/{option_ticker}"
+    year, month, day = entry_day.split("-")
+    # Your window: 19:55–20:00 UTC on 2025-06-03
+    t0 = datetime(int(year), int(month), int(day), 19, 55, 0, tzinfo=timezone.utc)
+    t1 = datetime(int(year), int(month), int(day), 20,  0, 0, tzinfo=timezone.utc)
+    
+    # Query parameters
+    params = {
+        "timestamp.lte": to_ns(t0),     # ≤ ns
+        "timestamp.gte": to_ns(t1),     # ≥ ns
+        "order": "desc",         # newest first
+        "limit": 1,
+        "apiKey": API_KEY,
+        }
+    
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if data['status'] != 'OK' or not data.get('results'):
+            return None
+            
+        return data
+        
+    except requests.RequestException as e:
+        print(f"Error fetching quote for {option_ticker}  {entry_day}: {str(e)}")
+        return None
+    except Exception as e:
+        print(f"Unexpected error for {option_ticker}: {str(e)}")
+        return None
+
 if __name__ == "__main__":
     P_obs = get_price_obs("O:AAPL250703C00210000", "2025-06-02")
     print(P_obs)
+    option_quotes = get_option_quotes("O:A200619C00080000", "2020-05-06")
+    print(option_quotes)
