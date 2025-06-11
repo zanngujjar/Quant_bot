@@ -9,7 +9,7 @@ def read_log_prices(n_rows: int = 30) -> None:
     """
     try:
         # Read the parquet file
-        df = pd.read_parquet("log_prices.parquet")
+        df = pd.read_parquet("option_liquidity.parquet")
         
         # Display basic information
         print("\nDataFrame Info:")

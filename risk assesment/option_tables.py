@@ -88,8 +88,6 @@ def first_expiry_in_band(symbol: str, entry: str, lo: int = 20, hi: int = 45):
         valid_expiries.sort(key=lambda x: abs(x[1] - lo))  # Sort by closest to lo (20 days)
         
         selected_date, selected_dte = valid_expiries[0]
-        print(f"\nSelected expiry date: {selected_date} (DTE: {selected_dte} days)")
-        print(f"Selected as closest to {lo} days within {lo}-{hi} day range")
             
         return selected_date
         
@@ -116,7 +114,7 @@ def to_ns(dt_utc):
     return int(timegm(dt_utc.timetuple())*1e9 + dt_utc.microsecond*1e3)
 
 
-def get_price_obs(symbol: str, Date: str) -> float:
+def get_price_obs(symbol: str, Date: str, session=None) -> float:
     # API endpoint
     url = f"https://api.polygon.io/v3/trades/{symbol}"
 
@@ -136,7 +134,10 @@ def get_price_obs(symbol: str, Date: str) -> float:
 
     # Make the API call
     try:
-        response = requests.get(url, params=params)
+        if session:
+            response = session.get(url, params=params, timeout=30)
+        else:
+            response = requests.get(url, params=params)
         response.raise_for_status()  # Raises an HTTPError for bad responses
     
         data = response.json()
@@ -147,7 +148,7 @@ def get_price_obs(symbol: str, Date: str) -> float:
     except Exception as e:
         return None  # Silent return on any other errors
 
-def get_option_vol(option_ticker: str, date: str) -> dict:
+def get_option_vol(option_ticker: str, date: str, session=None) -> dict:
     """
     Fetch daily aggregated OHLCV data for an options contract.
     
@@ -182,7 +183,10 @@ def get_option_vol(option_ticker: str, date: str) -> dict:
     }
     
     try:
-        response = requests.get(url, params=params)
+        if session:
+            response = session.get(url, params=params, timeout=30)
+        else:
+            response = requests.get(url, params=params)
         response.raise_for_status()
         
         data = response.json()
@@ -199,7 +203,7 @@ def get_option_vol(option_ticker: str, date: str) -> dict:
         print(f"Unexpected error for {option_ticker}: {str(e)}")
         return None
 
-def get_option_quotes(option_ticker: str, entry_day: str ) -> dict:
+def get_option_quotes(option_ticker: str, entry: str, session=None) -> dict:
     """
     Fetch a single quote for an options contract at a specific nanosecond timestamp.
     
@@ -226,22 +230,25 @@ def get_option_quotes(option_ticker: str, entry_day: str ) -> dict:
     """
     # API endpoint for quotes
     url = f"https://api.polygon.io/v3/quotes/{option_ticker}"
-    year, month, day = entry_day.split("-")
+    # Your window: 19:55–20:00 UTC on 2025-06-03
+    # Query parameters
+    year, month, day = entry.split("-")
     # Your window: 19:55–20:00 UTC on 2025-06-03
     t0 = datetime(int(year), int(month), int(day), 19, 55, 0, tzinfo=timezone.utc)
     t1 = datetime(int(year), int(month), int(day), 20,  0, 0, tzinfo=timezone.utc)
-    
-    # Query parameters
     params = {
-        "timestamp.lte": to_ns(t0),     # ≤ ns
-        "timestamp.gte": to_ns(t1),     # ≥ ns
+        "timestamp.gte": to_ns(t0),
+        "timestamp.lt": to_ns(t1),
         "order": "desc",         # newest first
         "limit": 1,
         "apiKey": API_KEY,
         }
     
     try:
-        response = requests.get(url, params=params)
+        if session:
+            response = session.get(url, params=params, timeout=30)
+        else:
+            response = requests.get(url, params=params)
         response.raise_for_status()
         
         data = response.json()
@@ -252,14 +259,42 @@ def get_option_quotes(option_ticker: str, entry_day: str ) -> dict:
         return data
         
     except requests.RequestException as e:
-        print(f"Error fetching quote for {option_ticker}  {entry_day}: {str(e)}")
+        print(f"Error fetching quote for {option_ticker}  {entry}: {str(e)}")
         return None
     except Exception as e:
         print(f"Unexpected error for {option_ticker}: {str(e)}")
         return None
 
+def is_older_than_years(entry_date_str, years=3, reference_date=None):
+    """
+    Return True if entry_date_str (YYYY-MM-DD) is more than `years` years before reference_date.
+    """
+    entry = datetime.strptime(entry_date_str, "%Y-%m-%d").date()
+    ref   = reference_date or datetime.now().date()
+    return (ref - entry).days > years * 365
+
+def calibrate_spread_factor(quote, vol):
+    """
+    Given a recent bid/ask quote and the day's high/low, compute a factor to map high-low range to spread.
+    quote = {'ask_price':…, 'bid_price':…}
+    vol   = {'h': high, 'l': low}
+    """
+    spread   = quote['ask_price'] - quote['bid_price']
+    mid      = (quote['ask_price'] + quote['bid_price']) / 2
+    rel_range= (vol['h'] - vol['l']) / mid if mid else None
+    return spread / rel_range if rel_range else None
+
+def estimate_spread(vol, factor, mid_price):
+    """
+    Estimate bid-ask spread for old data given high/low and a calibration factor.
+    vol        = {'h': high, 'l': low}
+    factor     = calibration factor from calibrate_spread_factor
+    mid_price  = (ask+bid)/2 from vol-stats context
+    """
+    rel_range  = (vol['h'] - vol['l']) / mid_price if mid_price else None
+    return rel_range * factor if rel_range else None
 if __name__ == "__main__":
     P_obs = get_price_obs("O:AAPL250703C00210000", "2025-06-02")
     print(P_obs)
-    option_quotes = get_option_quotes("O:A200619C00080000", "2020-05-06")
+    option_quotes = get_option_quotes("O:AAPL250703C00210000", "2025-06-02")
     print(option_quotes)

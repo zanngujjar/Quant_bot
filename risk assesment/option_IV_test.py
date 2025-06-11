@@ -79,7 +79,10 @@ def implied_vol(S, K, r, T, P_obs, cp, q=0.0,
 def simple_to_continuous(entry_date):
     db = Database()
     with db:
-        r_simple = db.get_risk_free_rate(entry_date) / 100.0
+        r_simple = db.get_risk_free_rate(entry_date)
+        if r_simple is None:
+            r_simple = 3.0  # Default 3% risk-free rate when no data available CHANGE LATER
+        r_simple = r_simple / 100.0
         return math.log(1.0 + r_simple)
 
 def get_q(ticker, entry_date, exit_date, r, S, T):

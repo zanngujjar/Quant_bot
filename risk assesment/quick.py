@@ -15,6 +15,7 @@ def read_filtered_data():
     print(f"Total rows: {len(df):,}")
     print(f"Unique ticker IDs: {df['ticker_id'].nunique():,}")
     print(f"Date range: {df['date'].min()} to {df['date'].max()}")
+    #print(f"Date range: {df['entry_date'].min()} to {df['entry_date'].max()}")
     
     # Display sample of the data
     print("\n" + "="*60)

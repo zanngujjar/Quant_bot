@@ -461,7 +461,7 @@ class Database:
             print(f"Error getting tickers: {e}")
             raise
 
-    def get_ticker_prices(self, ticker_id: int, start_date: Optional[str] = None, 
+    def get_ticker_prices_asc(self, ticker_id: int, start_date: Optional[str] = None, 
                          end_date: Optional[str] = None) -> List[Tuple]:
         """Get price data for a ticker within a date range"""
         try:
@@ -488,6 +488,32 @@ class Database:
             print(f"Error getting ticker prices: {e}")
             raise
 
+    def get_ticker_prices_dec(self, ticker_id: int, start_date: Optional[str] = None, 
+                         end_date: Optional[str] = None) -> List[Tuple]:
+        """Get price data for a ticker within a date range"""
+        try:
+            query = """
+                SELECT date, close_price 
+                FROM ticker_prices 
+                WHERE ticker_id = ?
+            """
+            params = [ticker_id]
+            
+            if start_date:
+                query += " AND date >= ?"
+                params.append(start_date)
+            if end_date:
+                query += " AND date <= ?"
+                params.append(end_date)
+                
+            query += " ORDER BY date DESC"
+            
+            self.cursor.execute(query, params)
+            return self.cursor.fetchall()
+            
+        except sqlite3.Error as e:
+            print(f"Error getting ticker prices: {e}")
+            raise
     def get_high_correlations(self, min_correlation: float = 0.7) -> List[Tuple]:
         """Get all high correlation pairs above a minimum threshold"""
         try:

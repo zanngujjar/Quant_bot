@@ -6,6 +6,13 @@ import sys
 import pandas as pd
 import requests
 from dotenv import load_dotenv   # pip install python-dotenv
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+import multiprocessing
+from tqdm import tqdm
+import time
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Add the parent directory to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -25,26 +32,49 @@ if not API_KEY:
     sys.exit("❌  POLYGON_API_KEY not found in .env")
 # Read in filtered ticker data
 try:
-    filtered_data = pd.read_parquet("filtered_ticker_dates.parquet")
+    filtered_data = pd.read_parquet("option_liquidity_filtered.parquet")
 except FileNotFoundError:
-    sys.exit("❌ filtered_ticker_dates.parquet not found")
+    sys.exit("❌ option_liquidity.parquet not found")
 except Exception as e:
     sys.exit(f"❌ Error reading parquet file: {e}")
+filtered_data = filtered_data.sort_values('entry_date', ascending=False)
 
-# Initialize database connection
-db = Database()
-option_greeks = []
-with db:
-    #get tickers from database
-    tickers = db.get_tickers()
+def create_session():
+    """Create a requests session with connection pooling and retry strategy"""
+    session = requests.Session()
+    
+    # Configure retry strategy
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=0.3,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    
+    # Mount adapter with connection pooling
+    adapter = HTTPAdapter(
+        pool_connections=20,  # Reduced from 100
+        pool_maxsize=20,      # Reduced from 100
+        max_retries=retry_strategy
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    return session
 
-    for ticker in tickers:
-        #get close price from database
-        if ticker[0] not in filtered_data['ticker_id'].values:
-            continue
-        close_price = db.get_ticker_prices(ticker[0])
+def process_ticker(ticker, ticker_filtered_data):
+    """Process a single ticker and return option_greeks and liquidity_data"""
+    ticker_option_greeks = []
+    ticker_liquidity_data = []
+    
+    # Create a session for this thread
+    session = create_session()
+    
+    # Create a new database connection for this thread
+    db = Database()
+    with db:
+        close_price = db.get_ticker_prices_dec(ticker[0])
         for price in close_price: 
-            if price[0] not in filtered_data[filtered_data['ticker_id'] == ticker[0]]['date'].values:
+            if price[0] not in ticker_filtered_data['entry_date'].values:
                 continue
             #get optimal expiry date for the ticker on a given day
             exp_date = first_expiry_in_band(ticker[1], price[0])
@@ -58,7 +88,9 @@ with db:
             }
             #for each call and put option chain
             for url in urls:
-                response = requests.get(url)
+                # Add small delay to prevent overwhelming API and socket exhaustion
+                time.sleep(0.1)  # 100ms delay between requests
+                response = session.get(url, timeout=30)
                 if response.status_code == 200:
                     option_contracts = response.json()
                     if 'results' in option_contracts and option_contracts['results']:
@@ -86,7 +118,7 @@ with db:
                         for index, option in option_stats.iterrows():
                             #extract the option p_obs from the polygon api based on close price 
                             #and the last 5 minutes of trade time 
-                            P_obs = get_price_obs(option['ticker'], price[0])
+                            P_obs = get_price_obs(option['ticker'], price[0], session)
                             #if the option p_obs is found, and the option chain is not empty
                             if P_obs and 'results' in P_obs and P_obs['results']:
                                 #extract the option p_obs from the option chain
@@ -97,13 +129,12 @@ with db:
                                 cp = 1 if option['contract_type'] == 'call' else -1
                                 #inputs: S, K, P_obs, cp, entry, exit, ticker_underlying
                                 iv, delta, gamma, theta, vega = get_greeks(price[1], option['strike_price'], P_obs, cp, price[0], exp_date, ticker[1])
-                                option_greeks.append([ticker[1], option['ticker'], price[1], option['strike_price'], P_obs, cp, price[0], exp_date, iv, delta, gamma, theta, vega, nanosecond])
+                                ticker_option_greeks.append([ticker[1], option['ticker'], price[1], option['strike_price'], P_obs, cp, price[0], exp_date, iv, delta, gamma, theta, vega, nanosecond])
                                 # Calculate how close this delta is to our target
                                 delta_diff = abs(delta - target_delta)
                                 
                                 # If this option is closer to our target than any we've seen before
                                 if delta_diff < best_delta_diff:
-                                    print(f"Found better option with ticker: {option['ticker']}")  # Debug print
                                     best_option = {
                                         'ticker_underlying': ticker[1],
                                         'ticker_option': option['ticker'],
@@ -124,21 +155,13 @@ with db:
                         
                         # If we found a suitable option, add it to our results
                         if best_option is not None:
-                            print(f"Selected option ticker: {best_option['ticker_option']}")  # Debug print
-                            print(f"Entry: {best_option['entry']}")
                             # Get volume statistics for the selected option
-                            vol_stats = get_option_vol(best_option['ticker_option'], best_option['entry'])
-                            if vol_stats and 'results' in vol_stats and vol_stats['results']:
-                                print(f"Volume: {vol_stats['results'][0]['v']}")
-                                print(f"VWAP: {vol_stats['results'][0]['vw']}")
-                                print(f"Number of trades: {vol_stats['results'][0]['n']}")
-                                print(f"High: {vol_stats['results'][0]['h']}")
-                                print(f"Low: {vol_stats['results'][0]['l']}")
-                                print(f"Close: {best_option['P_obs']}")
-                                print(f"Option Ticker: {best_option['ticker_option']}")  # Print the actual ticker value
-                            quote_data = get_option_quotes(best_option['ticker_option'], best_option['entry'])
-                            if quote_data and 'results' in quote_data and quote_data['results']:
-                                quote = quote_data['results'][0]
+                            vol_stats = get_option_vol(best_option['ticker_option'], best_option['entry'], session)
+                            if vol_stats['results'][0] is None:
+                                continue
+                            q = get_option_quotes(best_option['ticker_option'], best_option['entry'], session)
+                            if q and 'results' in q and q['results']:
+                                quote = q['results'][0]
                                 slippage_stats = {
                                     'bid_price': quote['bid_price'],
                                     'bid_size': quote['bid_size'], 
@@ -148,9 +171,123 @@ with db:
                                     'mid_price': (quote['ask_price'] + quote['bid_price']) / 2,
                                     'relative_spread': (quote['ask_price'] - quote['bid_price']) / ((quote['ask_price'] + quote['bid_price']) / 2)
                                 }
-                                print(f"Bid-Ask Spread: ${slippage_stats['bid_ask_spread']:.4f}")
-                                print(f"Relative Spread: {slippage_stats['relative_spread']*100:.2f}%")                                    print(f"Bid Size: {slippage_stats['bid_size']}")
-                                print(f"Ask Size: {slippage_stats['ask_size']}")
+
+                                hloc = vol_stats['results'][0]
+                                if is_older_than_years(best_option['entry'], years=3):
+                                    # calibrate on recent window
+                                    factor = calibrate_spread_factor(q, { 'h': hloc['h'], 'l': hloc['l'] })
+                                    mid    = (quote['ask_price'] + quote['bid_price'])/2
+                                    est_sp = estimate_spread({ 'h':hloc['h'], 'l':hloc['l'] }, factor, mid)
+                                    bid_ask_spread   = est_sp
+                                    relative_spread  = est_sp / mid if mid else None
+                                else:
+                                    bid_ask_spread  = quote['ask_price'] - quote['bid_price']
+                                    mid             = (quote['ask_price'] + quote['bid_price'])/2
+                                    relative_spread = bid_ask_spread / mid if mid else None
+                                volume = hloc.get('v', 0)
+                                slip = relative_spread or 0
+                                # === Liquidity filter & console output ===
+                                if volume > 100 and slip <= 0.06 :  # 6% spread for high volume
+                                    ticker_liquidity_data.append([ticker[0], best_option['entry']])
+                                elif volume > 300 and slip <= 0.10:  # 10% spread for medium volume  
+                                    ticker_liquidity_data.append([ticker[0], best_option['entry']])
+                                else:
+                                    continue
+    
+    # Close the session when done
+    session.close()
+    return ticker_option_greeks, ticker_liquidity_data
+
+# Initialize database connection to get tickers
+db = Database()
+option_greeks = []
+liquidity_data = []
+
+with db:
+    #get tickers from database
+    tickers = db.get_tickers()
+
+# Filter tickers that exist in filtered_data
+valid_tickers = [ticker for ticker in tickers if ticker[0] in filtered_data['ticker_id'].values]
+
+# Calculate optimal thread count - reduce to prevent socket exhaustion
+optimal_threads = min(len(valid_tickers), max(4, multiprocessing.cpu_count()))  # Conservative: max CPU cores, min 4
+
+print(f"🚀 Processing {len(valid_tickers)} tickers using {optimal_threads} threads")
+print("📊 Starting option liquidity analysis...")
+
+# Use ThreadPoolExecutor to process tickers in parallel
+with ThreadPoolExecutor(max_workers=optimal_threads) as executor:
+    # Prepare futures for each ticker
+    future_to_ticker = {}
+    for ticker in valid_tickers:
+        # Get filtered data for this specific ticker
+        ticker_filtered_data = filtered_data[filtered_data['ticker_id'] == ticker[0]]
+        future = executor.submit(process_ticker, ticker, ticker_filtered_data)
+        future_to_ticker[future] = ticker
+    
+    # Initialize progress bar
+    progress_bar = tqdm(
+        total=len(valid_tickers),
+        desc="Processing tickers",
+        unit="ticker",
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"
+    )
+    
+    # Collect results as they complete
+    completed_count = 0
+    successful_tickers = 0
+    failed_tickers = 0
+    total_greeks = 0
+    total_liquidity = 0
+    
+    for future in as_completed(future_to_ticker):
+        ticker = future_to_ticker[future]
+        try:
+            ticker_option_greeks, ticker_liquidity_data = future.result()
+            # Thread-safe appending of results
+            option_greeks.extend(ticker_option_greeks)
+            liquidity_data.extend(ticker_liquidity_data)
+            
+            # Update counters
+            successful_tickers += 1
+            total_greeks += len(ticker_option_greeks)
+            total_liquidity += len(ticker_liquidity_data)
+            
+            # Update progress bar with detailed info
+            progress_bar.set_postfix({
+                'Current': ticker[1][:6],
+                'Greeks': len(ticker_option_greeks),
+                'Liquidity': len(ticker_liquidity_data),
+                'Success': successful_tickers,
+                'Failed': failed_tickers
+            })
+            
+        except Exception as exc:
+            failed_tickers += 1
+            progress_bar.set_postfix({
+                'Current': f"{ticker[1][:6]}❌",
+                'Success': successful_tickers,
+                'Failed': failed_tickers,
+                'Error': str(exc)[:20]
+            })
+        
+        completed_count += 1
+        progress_bar.update(1)
+    
+    # Close progress bar
+    progress_bar.close()
+    
+    # Print final summary
+    print(f"\n✅ Processing completed!")
+    print(f"📈 Successfully processed: {successful_tickers}/{len(valid_tickers)} tickers")
+    print(f"❌ Failed: {failed_tickers} tickers")
+    print(f"🎯 Total option Greeks records: {total_greeks}")
+    print(f"💧 Total liquidity records: {total_liquidity}")
+
+
+                   
+
 # After processing all tickers, create DataFrame and save to parquet
 if option_greeks:
     # Create DataFrame with specified columns
@@ -174,3 +311,22 @@ if option_greeks:
     print(f"Delta range: {df['delta'].min():.4f} to {df['delta'].max():.4f}")
 else:
     print("No option greeks data was collected.")
+
+# Create and save liquidity data parquet
+if liquidity_data:
+    # Create DataFrame with specified columns
+    liquidity_df = pd.DataFrame(liquidity_data, columns=['ticker_id', 'entry_date'])
+    
+    # Save to parquet file
+    liquidity_output_file = "option_liquidity.parquet"
+    liquidity_df.to_parquet(liquidity_output_file)
+    print(f"\nSaved {len(liquidity_df)} liquidity records to {liquidity_output_file}")
+    
+    # Print summary statistics
+    print("\nLiquidity Summary Statistics:")
+    print(f"Number of unique tickers: {liquidity_df['ticker_id'].nunique()}")
+    print(f"Date range: {liquidity_df['entry_date'].min()} to {liquidity_df['entry_date'].max()}")
+else:
+    print("No liquidity data was collected.")
+
+
